@@ -262,7 +262,7 @@ def criar_caminho_raw(
     data_inicio,
     data_fim,
 ):
-    pasta = RAW_DIR
+    pasta = RAW_DIR / data_inicio.strftime("%m-%Y")
 
     pasta.mkdir(
         parents=True,
@@ -270,9 +270,7 @@ def criar_caminho_raw(
     )
 
     nome_arquivo = (
-        f"viagens_{codigo_orgao}_"
-        f"{data_inicio.strftime('%Y%m%d')}_"
-        f"{data_fim.strftime('%Y%m%d')}.json"
+        f"viagens_{codigo_orgao}.json"
     )
 
     return pasta / nome_arquivo
