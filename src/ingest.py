@@ -5,6 +5,8 @@ import pandas as pd
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import requests
+import time
+import json
 
 load_dotenv()
 
@@ -90,16 +92,59 @@ def requisitar(params):
         "chave-api-dados": API_KEY,
     }
 
-    resposta = requests.get(
-        url,
-        params=params,
-        headers=headers,
-        timeout=REQUEST_TIMEOUT,
+    for tentativa in range(MAX_TENTATIVAS):
+        resposta = requests.get(
+            url,
+            params=params,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT,
+        )
+
+        if resposta.status_code == 200:
+            return resposta.json()
+
+        if resposta.status_code in (401, 403):
+            raise PermissionError(
+                f"Credencial inválida ou acesso negado: "
+                f"{resposta.status_code}"
+            )
+
+        if resposta.status_code == 429:
+            espera = int(
+                resposta.headers.get(
+                    "Retry-After",
+                    BACKOFF_BASE ** tentativa,
+                )
+            )
+
+            print(
+                f"Limite de requisições atingido. "
+                f"Aguardando {espera}s."
+            )
+
+            time.sleep(espera)
+            continue
+
+        if resposta.status_code >= 500:
+            espera = BACKOFF_BASE ** tentativa
+
+            print(
+                f"Erro no servidor ({resposta.status_code}). "
+                f"Tentativa {tentativa + 1}/"
+                f"{MAX_TENTATIVAS}."
+            )
+
+            time.sleep(espera)
+            continue
+
+        raise RuntimeError(
+            f"Erro HTTP {resposta.status_code}: "
+            f"{resposta.text[:300]}"
+        )
+
+    raise RuntimeError(
+        f"Falha após {MAX_TENTATIVAS} tentativas."
     )
-
-    resposta.raise_for_status()
-
-    return resposta.json()
 
 def gerar_periodos():
     if MESES_POR_COLETA != 1:
@@ -153,6 +198,58 @@ def coletar_paginas(codigo_orgao, data_inicio, data_fim):
 
     return registros
 
+def salvar_coleta(
+    registros,
+    codigo_orgao,
+    nome_orgao,
+    data_inicio,
+    data_fim,
+):
+    data_coleta = datetime.now().strftime("%Y-%m-%d")
+
+    pasta = RAW_DIR / data_coleta
+    pasta.mkdir(parents=True, exist_ok=True)
+
+    nome_arquivo = (
+        f"viagens_{codigo_orgao}_"
+        f"{data_inicio.strftime('%Y%m%d')}_"
+        f"{data_fim.strftime('%Y%m%d')}.json"
+    )
+
+    caminho = pasta / nome_arquivo
+
+    if caminho.exists():
+        print(f"Já coletado. Ignorando: {caminho}")
+        return 0, caminho
+
+    envelope = {
+        "fonte": "Portal da Transparência",
+        "endpoint": API_ENDPOINT,
+        "coletado_em": datetime.now().astimezone().isoformat(),
+        "parametros_coleta": {
+            "codigoOrgao": codigo_orgao,
+            "nomeOrgao": nome_orgao,
+            "dataIdaDe": data_inicio.strftime("%d/%m/%Y"),
+            "dataIdaAte": data_fim.strftime("%d/%m/%Y"),
+            "dataRetornoDe": data_inicio.strftime("%d/%m/%Y"),
+            "dataRetornoAte": data_fim.strftime("%d/%m/%Y"),
+        },
+        "quantidade_registros": len(registros),
+        "dados": registros,
+    }
+
+    caminho.write_text(
+        json.dumps(
+            envelope,
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    return len(registros), caminho
+
+
 def main():
     orgaos = carregar_orgaos()
     periodos = gerar_periodos()
@@ -160,13 +257,22 @@ def main():
     orgao = orgaos.iloc[0]
     inicio, fim = periodos[0]
 
-    dados = coletar_paginas(
+    registros = coletar_paginas(
         orgao[ORGAOS_CODIGO_COL],
         inicio,
         fim,
     )
 
-    print(f"Registros recebidos: {len(dados)}")
+    caminho = salvar_coleta(
+        registros,
+        orgao[ORGAOS_CODIGO_COL],
+        orgao[ORGAOS_NOME_COL],
+        inicio,
+        fim,
+    )
+
+    print(f"Registros coletados: {len(registros)}")
+    print(f"Arquivo salvo: {caminho}")
 
 
 if __name__ == "__main__":
