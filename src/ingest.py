@@ -253,10 +253,9 @@ def coletar_paginas(
     return registros
 
 
-def criar_caminho_raw(
+def criar_pasta_raw(
     codigo_orgao,
     data_inicio,
-    data_fim,
 ):
     pasta = (
         RAW_DIR
@@ -270,7 +269,42 @@ def criar_caminho_raw(
         exist_ok=True,
     )
 
-    return pasta / "viagens.json"
+    return pasta
+
+
+def criar_caminho_coleta(
+    codigo_orgao,
+    data_inicio,
+):
+    pasta = criar_pasta_raw(
+        codigo_orgao,
+        data_inicio,
+    )
+
+    data_coleta = datetime.now().astimezone().strftime(
+        "%Y-%m-%d"
+    )
+
+    return pasta / f"viagens_{data_coleta}.json"
+
+
+def encontrar_coleta(
+    codigo_orgao,
+    data_inicio,
+):
+    pasta = criar_pasta_raw(
+        codigo_orgao,
+        data_inicio,
+    )
+
+    arquivos = sorted(
+        pasta.glob("viagens_*.json")
+    )
+
+    if arquivos:
+        return arquivos[0]
+
+    return None
 
 
 def criar_envelope(
@@ -304,14 +338,18 @@ def salvar_coleta(
     data_inicio,
     data_fim,
 ):
-    caminho = criar_caminho_raw(
+    coleta_existente = encontrar_coleta(
         codigo_orgao,
         data_inicio,
-        data_fim,
     )
 
-    if caminho.exists():
-        return 0, caminho, False
+    if coleta_existente is not None:
+        return 0, coleta_existente, False
+
+    caminho = criar_caminho_coleta(
+        codigo_orgao,
+        data_inicio,
+    )
 
     envelope = criar_envelope(
         registros,
@@ -345,15 +383,11 @@ def preparar_coleta():
 def coleta_ja_realizada(
     codigo_orgao,
     data_inicio,
-    data_fim,
 ):
-    caminho = criar_caminho_raw(
+    return encontrar_coleta(
         codigo_orgao,
         data_inicio,
-        data_fim,
-    )
-
-    return caminho.exists()
+    ) is not None
 
 
 def executar_coleta(
@@ -373,7 +407,6 @@ def executar_coleta(
             if coleta_ja_realizada(
                 codigo,
                 inicio,
-                fim,
             ):
                 total_ignoradas += 1
                 continue
@@ -419,7 +452,10 @@ def main():
     print(f"Períodos processados: {resultado['periodos']}")
     print(f"Coletas realizadas: {resultado['coletas']}")
     print(f"Coletas ignoradas: {resultado['ignoradas']}")
-    print(f"Registros coletados: {resultado['registros']}")
+    print(
+        f"Registros coletados: "
+        f"{resultado['registros']}"
+    )
     print(f"Dados salvos em: {RAW_DIR}")
 
 
