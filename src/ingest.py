@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 from dotenv import load_dotenv
 
+from datetime import datetime, timedelta
 
 load_dotenv()
 
@@ -53,11 +54,72 @@ def carregar_orgaos():
     ].dropna().drop_duplicates()
 
 
+def adicionar_meses(data, quantidade):
+    mes = data.month - 1 + quantidade
+    ano = data.year + mes // 12
+    mes = mes % 12 + 1
+
+    dias_no_mes = [
+        31,
+        29 if ano % 4 == 0 and (
+            ano % 100 != 0 or ano % 400 == 0
+        ) else 28,
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ]
+
+    dia = min(data.day, dias_no_mes[mes - 1])
+
+    return data.replace(
+        year=ano,
+        month=mes,
+        day=dia,
+    )
+
+
+def gerar_periodos():
+    if MESES_POR_COLETA != 1:
+        raise ValueError(
+            "MESES_POR_COLETA deve ser 1 para o endpoint /viagens."
+        )
+
+    periodos = []
+    inicio = DATA_INICIO
+
+    while inicio <= DATA_FIM:
+        fim = adicionar_meses(
+            inicio,
+            MESES_POR_COLETA,
+        ) - timedelta(days=1)
+
+        if fim > DATA_FIM:
+            fim = DATA_FIM
+
+        periodos.append((inicio, fim))
+        inicio = fim + timedelta(days=1)
+
+    return periodos
+
 def main():
     orgaos = carregar_orgaos()
+    periodos = gerar_periodos()
 
     print(f"Órgãos encontrados: {len(orgaos)}")
-    print(orgaos.to_string(index=False))
+    print(f"Períodos encontrados: {len(periodos)}")
+
+    for inicio, fim in periodos:
+        print(
+            f"{inicio.strftime('%d/%m/%Y')} - "
+            f"{fim.strftime('%d/%m/%Y')}"
+        )
 
 
 if __name__ == "__main__":
