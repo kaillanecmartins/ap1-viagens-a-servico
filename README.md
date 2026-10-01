@@ -1,142 +1,124 @@
 # Análise de viagens a serviço dos Institutos Federais do Nordeste
 
-Projeto desenvolvido para a atividade prática da Etapa 1 da disciplina de Introdução à Ciência de Dados.
+Projeto da disciplina de Introdução à Ciência de Dados para coleta e análise de viagens a serviço dos Institutos Federais de Educação, Ciência e Tecnologia do Nordeste.
 
-O objetivo é coletar, organizar e analisar dados de viagens a serviço dos Institutos Federais de Educação, Ciência e Tecnologia do Nordeste, utilizando informações disponibilizadas pelo Portal da Transparência do Governo Federal.
+Os dados são obtidos da **API de Dados do Portal da Transparência do Governo Federal**, utilizando o endpoint `/viagens`. A coleta considera os anos de **2024 e 2025**, em períodos mensais, para os 11 Institutos Federais selecionados.
 
-## Objetivo da análise
+## Chave da API
 
-Investigar a quantidade de viagens realizadas pelos Institutos Federais no ano de 2025 e identificar quais instituições registraram mais viagens no período.
+A API utiliza uma chave de acesso. caso ainda não possua uma chave de api do portal da transparência, é necessário se cadastrar em: [Cadastrar E-mail](https://portaldatransparencia.gov.br/api-de-dados/cadastrar-email)
 
-A análise utiliza os dados coletados por meio da API do Portal da Transparência.
+Depois de obter a chave, crie o arquivo `.env` a partir do `.env.example` e informe:
 
-## Fonte dos dados
-
-- **Fonte:** Portal da Transparência do Governo Federal
-- **API:** API de Dados do Portal da Transparência
-- **Endpoint utilizado:** `/viagens`
-- **Período analisado:** janeiro a dezembro de 2025
-- **Recorte:** Institutos Federais de Educação, Ciência e Tecnologia do Nordeste
-
-Os dados são obtidos por meio de requisições à API. A coleta depende dos parâmetros exigidos pelo serviço e da disponibilidade dos dados.
-
-## Tecnologias utilizadas
-
-- Python
-- uv
-- pandas
-- DuckDB
-- requests
-- python-dotenv
-- Quarto
-
-## Estrutura do projeto
-
-```text
-.
-├── data/
-│   ├── raw/
-│   │   └── portal_transparencia/
-│   ├── trusted/
-│   └── quarentena/
-├── src/
-│   ├── ingest.py
-│   └── transform.py
-├── diagnostico.qmd
-├── .env.example
-├── .gitignore
-├── pyproject.toml
-├── uv.lock
-└── README.md
+```env
+API_KEY=sua_chave_api
 ```
 
-### Organização dos dados
+A chave não deve ser adicionada ao código-fonte nem versionada no Git.
 
-- `data/raw/`: dados originais coletados da API.
-- `data/trusted/`: dados tratados e preparados para análise.
-- `data/quarentena/`: registros separados durante o tratamento por não atenderem às regras definidas.
+## Variáveis de ambiente
 
-Os dados brutos são gerados durante a execução da coleta e não são versionados no Git.
+As configurações da coleta são armazenadas no arquivo `.env`. O projeto utiliza as seguintes variáveis:
 
-## Configuração do ambiente
+| Variável            | Descrição                                              |
+| ------------------- | ------------------------------------------------------ |
+| `API_BASE_URL`      | URL base da API                                        |
+| `API_ENDPOINT`      | Endpoint utilizado na coleta                           |
+| `API_KEY`           | Chave de acesso à API                                  |
+| `ORGAOS_FILE`       | Arquivo com os órgãos selecionados                     |
+| `ORGAOS_CODIGO_COL` | Coluna que contém o código do órgão                    |
+| `ORGAOS_NOME_COL`   | Coluna que contém o nome do órgão                      |
+| `DATA_INICIO`       | Data inicial da coleta                                 |
+| `DATA_FIM`          | Data final da coleta                                   |
+| `MESES_POR_COLETA`  | Quantidade de meses consultados por requisição         |
+| `PAGE_SIZE`         | Quantidade de registros solicitados por página         |
+| `REQUEST_TIMEOUT`   | Tempo limite das requisições                           |
+| `MAX_TENTATIVAS`    | Número máximo de tentativas para erros recuperáveis    |
+| `BACKOFF_BASE`      | Base utilizada para o tempo de espera entre tentativas |
+| `RAW_DIR`           | Diretório onde os dados brutos serão armazenados       |
 
-### 1. Pré-requisitos
+Exemplo de configuração:
 
-Instale:
+```env
+API_BASE_URL=https://api.portaldatransparencia.gov.br/api-de-dados
+API_ENDPOINT=/viagens
+API_KEY=sua_chave_api
 
-- Python
-- uv
-- Git
+ORGAOS_FILE=config/ifs_nordeste.csv
+ORGAOS_CODIGO_COL=codigo
+ORGAOS_NOME_COL=nome
 
-### 2. Clonar o repositório
+DATA_INICIO=01/01/2024
+DATA_FIM=31/12/2025
+MESES_POR_COLETA=1
 
-```bash
-git clone https://github.com/kaillanecmartins/ap1-viagens-a-servico.git
-cd ap1-viagens-a-servico
+PAGE_SIZE=100
+REQUEST_TIMEOUT=30
+MAX_TENTATIVAS=5
+BACKOFF_BASE=2
+
+RAW_DIR=data/raw/portal_transparencia
 ```
 
-### 3. Configurar as variáveis de ambiente
+O arquivo `.env` contém informações de configuração e credenciais e, por isso, não deve ser versionado no Git.
 
-Crie o arquivo `.env` a partir do modelo:
+## Execução
 
-```bash
-cp .env.example .env
-```
-
-No Windows PowerShell, também é possível copiar o arquivo com:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Preencha as variáveis necessárias no arquivo `.env`, incluindo a chave de acesso à API, caso seja exigida.
-
-**Não envie o arquivo `.env` para o repositório.**
-
-### 4. Instalar as dependências
+Instale as dependências:
 
 ```bash
 uv sync
 ```
 
-## Execução do projeto
-
-Execute os comandos a partir da raiz do repositório.
-
-### 1. Coletar os dados
+Execute a coleta dos dados:
 
 ```bash
 uv run python src/ingest.py
 ```
 
-O script realiza a coleta dos dados da API e salva os arquivos brutos em `data/raw/`.
-
-### 2. Gerar o diagnóstico
+Gere o diagnóstico dos dados coletados:
 
 ```bash
 uv run quarto render diagnostico.qmd
 ```
 
-O diagnóstico apresenta uma análise inicial dos dados coletados, incluindo informações sobre estrutura, tipos, valores ausentes e possíveis problemas de qualidade.
-
-### 3. Transformar os dados
+Execute a transformação dos dados:
 
 ```bash
 uv run python src/transform.py
 ```
 
-O script realiza o tratamento dos dados e salva os resultados na camada `data/trusted/`. Registros que não atendem às regras definidas podem ser direcionados para `data/quarentena/`.
+A sequência completa é:
 
-## Resultados esperados
+```bash
+uv sync
+uv run python src/ingest.py
+uv run quarto render diagnostico.qmd
+uv run python src/transform.py
+```
 
-Ao executar o projeto, espera-se obter:
+A coleta é idempotente: se um órgão e período já tiverem sido coletados, uma nova execução não realiza novamente aquela coleta.
 
-- Dados brutos das viagens coletados da API.
-- Diagnóstico da qualidade e estrutura dos dados.
-- Dados tratados e organizados na camada trusted.
-- Informações que permitam analisar a quantidade de viagens por Instituto Federal do Nordeste em 2025.
+## Resultados
 
-## Observações
+Após a execução, os dados brutos ficam em:
 
-- A coleta depende da disponibilidade da API e dos limites de requisição definidos pelo serviço.
-- Os resultados dependem dos órgãos selecionados e dos critérios de tratamento implementados.
+```text
+data/raw/portal_transparencia/
+```
+
+organizados por órgão, ano e mês, com a data da coleta registrada no nome do arquivo:
+
+```text
+data/raw/portal_transparencia/
+└── <codigo_orgao>/
+    └── <ano>/
+        └── <mes>/
+            └── viagens_<data_da_coleta>.json
+```
+
+A camada `data/trusted/` contém os dados tratados e preparados para análise pelo `transform.py`.
+
+A pasta `data/quarentena/` contém os registros que não atendem às regras definidas para a camada trusted durante o tratamento dos dados.
+
+Ao finalizar a coleta, o programa informa a quantidade de registros coletados e o diretório onde os dados foram gravados.
