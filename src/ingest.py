@@ -360,12 +360,6 @@ def executar_coleta(
         nome = orgao[ORGAOS_NOME_COL]
 
         for inicio, fim in periodos:
-            print(
-                f"Coletando {nome} ({codigo}) | "
-                f"{inicio.strftime('%d/%m/%Y')} - "
-                f"{fim.strftime('%d/%m/%Y')}"
-            )
-
             registros = coletar_paginas(
                 codigo,
                 inicio,
@@ -383,17 +377,8 @@ def executar_coleta(
             if gravado:
                 total_coletas += 1
                 total_registros += quantidade
-
-                print(
-                    f"Registros: {quantidade} | "
-                    f"Arquivo: {caminho}"
-                )
             else:
                 total_ignoradas += 1
-
-                print(
-                    f"Já coletado: {caminho}"
-                )
 
     return {
         "orgaos": len(orgaos),
