@@ -248,10 +248,6 @@ def coletar_paginas(
             break
 
         registros.extend(dados)
-
-        if len(dados) < PAGE_SIZE:
-            break
-
         pagina += 1
 
     return registros
@@ -262,18 +258,19 @@ def criar_caminho_raw(
     data_inicio,
     data_fim,
 ):
-    pasta = RAW_DIR / data_inicio.strftime("%m-%Y")
+    pasta = (
+        RAW_DIR
+        / str(codigo_orgao)
+        / str(data_inicio.year)
+        / data_inicio.strftime("%m")
+    )
 
     pasta.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    nome_arquivo = (
-        f"viagens_{codigo_orgao}.json"
-    )
-
-    return pasta / nome_arquivo
+    return pasta / "viagens.json"
 
 
 def criar_envelope(
@@ -345,6 +342,20 @@ def preparar_coleta():
     return orgaos, periodos
 
 
+def coleta_ja_realizada(
+    codigo_orgao,
+    data_inicio,
+    data_fim,
+):
+    caminho = criar_caminho_raw(
+        codigo_orgao,
+        data_inicio,
+        data_fim,
+    )
+
+    return caminho.exists()
+
+
 def executar_coleta(
     orgaos,
     periodos,
@@ -358,13 +369,22 @@ def executar_coleta(
         nome = orgao[ORGAOS_NOME_COL]
 
         for inicio, fim in periodos:
+
+            if coleta_ja_realizada(
+                codigo,
+                inicio,
+                fim,
+            ):
+                total_ignoradas += 1
+                continue
+
             registros = coletar_paginas(
                 codigo,
                 inicio,
                 fim,
             )
 
-            quantidade, caminho, gravado = salvar_coleta(
+            quantidade, _, gravado = salvar_coleta(
                 registros,
                 codigo,
                 nome,
@@ -375,8 +395,6 @@ def executar_coleta(
             if gravado:
                 total_coletas += 1
                 total_registros += quantidade
-            else:
-                total_ignoradas += 1
 
     return {
         "orgaos": len(orgaos),
