@@ -28,13 +28,13 @@ DATA_FIM = datetime.strptime(
 ).date()
 
 MESES_POR_COLETA = int(os.environ["MESES_POR_COLETA"])
-
 PAGE_SIZE = int(os.environ["PAGE_SIZE"])
 REQUEST_TIMEOUT = int(os.environ["REQUEST_TIMEOUT"])
 MAX_TENTATIVAS = int(os.environ["MAX_TENTATIVAS"])
 BACKOFF_BASE = int(os.environ["BACKOFF_BASE"])
 
 RAW_DIR = Path(os.environ["RAW_DIR"])
+
 
 def validar_configuracao():
     if not API_KEY:
@@ -56,6 +56,7 @@ def validar_configuracao():
         raise ValueError(
             "MESES_POR_COLETA deve ser 1 para o endpoint /viagens."
         )
+
 
 def carregar_orgaos():
     df = pd.read_csv(
@@ -118,7 +119,9 @@ def adicionar_meses(data, quantidade):
         day=dia,
     )
 
+
 def gerar_periodos():
+    # O endpoint de viagens deve ser consultado em janelas mensais.
     periodos = []
     inicio = DATA_INICIO
 
@@ -141,6 +144,7 @@ def gerar_periodos():
         inicio = fim + timedelta(days=1)
 
     return periodos
+
 
 def requisitar(params):
     url = f"{API_BASE_URL}{API_ENDPOINT}"
@@ -167,6 +171,7 @@ def requisitar(params):
             )
 
         if resposta.status_code == 429:
+            # A API pode informar o tempo recomendado para nova tentativa.
             espera = int(
                 resposta.headers.get(
                     "Retry-After",
@@ -203,6 +208,7 @@ def requisitar(params):
         f"Falha após {MAX_TENTATIVAS} tentativas."
     )
 
+
 def criar_parametros(
     codigo_orgao,
     data_inicio,
@@ -218,6 +224,7 @@ def criar_parametros(
         "pagina": pagina,
         "tamanhoPagina": PAGE_SIZE,
     }
+
 
 def coletar_paginas(
     codigo_orgao,
@@ -249,16 +256,13 @@ def coletar_paginas(
 
     return registros
 
+
 def criar_caminho_raw(
     codigo_orgao,
     data_inicio,
     data_fim,
 ):
-    data_coleta = datetime.now().strftime(
-        "%Y-%m-%d"
-    )
-
-    pasta = RAW_DIR / data_coleta
+    pasta = RAW_DIR
 
     pasta.mkdir(
         parents=True,
@@ -272,6 +276,7 @@ def criar_caminho_raw(
     )
 
     return pasta / nome_arquivo
+
 
 def criar_envelope(
     registros,
@@ -295,6 +300,7 @@ def criar_envelope(
         "quantidade_registros": len(registros),
         "dados": registros,
     }
+
 
 def salvar_coleta(
     registros,
@@ -331,6 +337,7 @@ def salvar_coleta(
 
     return len(registros), caminho, True
 
+
 def preparar_coleta():
     validar_configuracao()
 
@@ -338,6 +345,7 @@ def preparar_coleta():
     periodos = gerar_periodos()
 
     return orgaos, periodos
+
 
 def executar_coleta(
     orgaos,
@@ -395,67 +403,27 @@ def executar_coleta(
         "registros": total_registros,
     }
 
+
 def main():
-    if not API_KEY:
-        raise ValueError(
-            "API_KEY não configurada no arquivo .env."
-        )
-
-    if not ORGAOS_FILE.exists():
-        raise FileNotFoundError(
-            f"Arquivo de órgãos não encontrado: {ORGAOS_FILE}"
-        )
-
-    orgaos = carregar_orgaos()
-    periodos = gerar_periodos()
-
-    total_registros = 0
-    total_coletas = 0
+    orgaos, periodos = preparar_coleta()
 
     print(
         f"Órgãos: {len(orgaos)} | "
         f"Períodos: {len(periodos)}"
     )
 
-    for _, orgao in orgaos.iterrows():
-        codigo = orgao[ORGAOS_CODIGO_COL]
-        nome = orgao[ORGAOS_NOME_COL]
-
-        for inicio, fim in periodos:
-            print(
-                f"Coletando {nome} ({codigo}) | "
-                f"{inicio.strftime('%d/%m/%Y')} - "
-                f"{fim.strftime('%d/%m/%Y')}"
-            )
-
-            registros = coletar_paginas(
-                codigo,
-                inicio,
-                fim,
-            )
-
-            quantidade, caminho = salvar_coleta(
-                registros,
-                codigo,
-                nome,
-                inicio,
-                fim,
-            )
-
-            total_registros += quantidade
-
-            if quantidade > 0:
-                total_coletas += 1
-
-            print(
-                f"Registros: {quantidade} | "
-                f"Arquivo: {caminho}"
-            )
+    resultado = executar_coleta(
+        orgaos,
+        periodos,
+    )
 
     print()
     print("Coleta finalizada.")
-    print(f"Coletas gravadas: {total_coletas}")
-    print(f"Registros coletados: {total_registros}")
+    print(f"Órgãos processados: {resultado['orgaos']}")
+    print(f"Períodos processados: {resultado['periodos']}")
+    print(f"Coletas gravadas: {resultado['coletas']}")
+    print(f"Coletas ignoradas: {resultado['ignoradas']}")
+    print(f"Registros coletados: {resultado['registros']}")
     print(f"Dados salvos em: {RAW_DIR}")
 
 
