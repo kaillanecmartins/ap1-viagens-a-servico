@@ -1,11 +1,10 @@
 import os
 from datetime import datetime
 from pathlib import Path
-
 import pandas as pd
 from dotenv import load_dotenv
-
 from datetime import datetime, timedelta
+import requests
 
 load_dotenv()
 
@@ -84,6 +83,23 @@ def adicionar_meses(data, quantidade):
         day=dia,
     )
 
+def requisitar(params):
+    url = f"{API_BASE_URL}{API_ENDPOINT}"
+
+    headers = {
+        "chave-api-dados": API_KEY,
+    }
+
+    resposta = requests.get(
+        url,
+        params=params,
+        headers=headers,
+        timeout=REQUEST_TIMEOUT,
+    )
+
+    resposta.raise_for_status()
+
+    return resposta.json()
 
 def gerar_periodos():
     if MESES_POR_COLETA != 1:
@@ -108,18 +124,49 @@ def gerar_periodos():
 
     return periodos
 
+def coletar_paginas(codigo_orgao, data_inicio, data_fim):
+    registros = []
+    pagina = 1
+
+    while True:
+        params = {
+            "dataIdaDe": data_inicio.strftime("%d/%m/%Y"),
+            "dataIdaAte": data_fim.strftime("%d/%m/%Y"),
+            "dataRetornoDe": data_inicio.strftime("%d/%m/%Y"),
+            "dataRetornoAte": data_fim.strftime("%d/%m/%Y"),
+            "codigoOrgao": codigo_orgao,
+            "pagina": pagina,
+            "tamanhoPagina": PAGE_SIZE,
+        }
+
+        dados = requisitar(params)
+
+        if not dados:
+            break
+
+        registros.extend(dados)
+
+        if len(dados) < PAGE_SIZE:
+            break
+
+        pagina += 1
+
+    return registros
+
 def main():
     orgaos = carregar_orgaos()
     periodos = gerar_periodos()
 
-    print(f"Órgãos encontrados: {len(orgaos)}")
-    print(f"Períodos encontrados: {len(periodos)}")
+    orgao = orgaos.iloc[0]
+    inicio, fim = periodos[0]
 
-    for inicio, fim in periodos:
-        print(
-            f"{inicio.strftime('%d/%m/%Y')} - "
-            f"{fim.strftime('%d/%m/%Y')}"
-        )
+    dados = coletar_paginas(
+        orgao[ORGAOS_CODIGO_COL],
+        inicio,
+        fim,
+    )
+
+    print(f"Registros recebidos: {len(dados)}")
 
 
 if __name__ == "__main__":
