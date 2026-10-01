@@ -407,11 +407,6 @@ def executar_coleta(
 def main():
     orgaos, periodos = preparar_coleta()
 
-    print(
-        f"Órgãos: {len(orgaos)} | "
-        f"Períodos: {len(periodos)}"
-    )
-
     resultado = executar_coleta(
         orgaos,
         periodos,
@@ -421,7 +416,7 @@ def main():
     print("Coleta finalizada.")
     print(f"Órgãos processados: {resultado['orgaos']}")
     print(f"Períodos processados: {resultado['periodos']}")
-    print(f"Coletas gravadas: {resultado['coletas']}")
+    print(f"Coletas realizadas: {resultado['coletas']}")
     print(f"Coletas ignoradas: {resultado['ignoradas']}")
     print(f"Registros coletados: {resultado['registros']}")
     print(f"Dados salvos em: {RAW_DIR}")
