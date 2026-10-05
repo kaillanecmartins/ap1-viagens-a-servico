@@ -154,12 +154,25 @@ def requisitar(params):
     }
 
     for tentativa in range(MAX_TENTATIVAS):
-        resposta = requests.get(
-            url,
-            params=params,
-            headers=headers,
-            timeout=REQUEST_TIMEOUT,
-        )
+        try:
+            resposta = requests.get(
+                url,
+                params=params,
+                headers=headers,
+                timeout=REQUEST_TIMEOUT,
+            )
+
+        except requests.RequestException as erro:
+            espera = BACKOFF_BASE ** tentativa
+
+            if tentativa + 1 == MAX_TENTATIVAS:
+                raise RuntimeError(
+                    f"Falha de rede após "
+                    f"{MAX_TENTATIVAS} tentativas: {erro}"
+                ) from erro
+
+            time.sleep(espera)
+            continue
 
         if resposta.status_code == 200:
             return resposta.json()
@@ -171,7 +184,6 @@ def requisitar(params):
             )
 
         if resposta.status_code == 429:
-            # A API pode informar o tempo recomendado para nova tentativa.
             espera = int(
                 resposta.headers.get(
                     "Retry-After",
@@ -179,22 +191,11 @@ def requisitar(params):
                 )
             )
 
-            print(
-                f"Limite de requisições atingido. "
-                f"Aguardando {espera}s."
-            )
-
             time.sleep(espera)
             continue
 
         if resposta.status_code >= 500:
             espera = BACKOFF_BASE ** tentativa
-
-            print(
-                f"Erro no servidor ({resposta.status_code}). "
-                f"Tentativa {tentativa + 1}/"
-                f"{MAX_TENTATIVAS}."
-            )
 
             time.sleep(espera)
             continue
