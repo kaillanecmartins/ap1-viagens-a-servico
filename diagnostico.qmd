@@ -42,6 +42,7 @@ correto é "data/raw/arquivo.csv".
 import json
 import pandas as pd
 from pathlib import Path
+from IPython.display import display # <-- ADICIONADO PARA CORRIGIR ERRO NO RENDER
 
 # 1. Define a pasta raiz (base) onde estão todas as subpastas
 pasta_base = Path(r"data\raw\portal_transparencia")
@@ -90,6 +91,7 @@ display(df_viagens.head(3))
 ```{python}
 from pathlib import Path
 import duckdb
+import matplotlib.pyplot as plt
 
 # 1. Define o caminho do arquivo transformado
 caminho_saida = Path(r"data\processed\viagens_transformadas.csv")
@@ -109,8 +111,10 @@ perfil = con.sql(f"SUMMARIZE SELECT * FROM '{CSV}'").df()
 # 5. Exibe a tabela de perfil com as colunas selecionadas
 df_perfil = perfil[["column_name", "column_type", "count", "approx_unique", "null_percentage", "min", "max"]]
 display(df_perfil)
+
 plt.figure(figsize=(10, 5))
-top_campi = df["unidadeGestoraResponsavel.nome"].value_counts().head(10)
+# <-- CORRIGIDO: Era 'df', agora é 'df_viagens' para o gráfico funcionar
+top_campi = df_viagens["unidadeGestoraResponsavel.nome"].value_counts().head(10)
 top_campi.plot(kind="bar", color="cornflowerblue")
 plt.title("Top 10 Unidades Gestoras com Maior Volume de Viagens", fontsize=14)
 plt.xlabel("Unidade Gestora")
