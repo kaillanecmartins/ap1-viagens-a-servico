@@ -16,6 +16,18 @@ API_KEY=sua_chave_api
 
 A chave não deve ser adicionada ao código-fonte nem versionada no Git.
 
+## Dados
+
+Os dados brutos utilizados no projeto correspondem aos registros de viagens a serviço dos Institutos Federais da região Nordeste selecionados para a análise, referentes aos anos de 2024 e 2025.
+
+Como os arquivos brutos possuem tempo elevado para serem carregados, sugere-se usar os dados já baixados. A base completa pode ser obtida no seguinte endereço:
+
+[Baixar dados brutos (2024–2025)](https://drive.google.com/drive/folders/1FOlScIaF38t1rK5bPHRZ3EAngkWjmBl6?usp=sharing)
+
+Após o download, extraia os arquivos para:
+
+data/raw/
+
 ## Variáveis de ambiente
 
 As configurações da coleta são armazenadas no arquivo `.env`. O projeto utiliza as seguintes variáveis:
@@ -117,8 +129,23 @@ data/raw/portal_transparencia/
             └── viagens_<data_da_coleta>.json
 ```
 
-A camada `data/trusted/` contém os dados tratados e preparados para análise pelo `transform.py`.
+### data/trusted/
 
-A pasta `data/quarentena/` contém os registros que não atendem às regras definidas para a camada trusted durante o tratamento dos dados.
+O `transform.py` grava `data/trusted/viagens.parquet`, com os dados limpos e validados por um contrato (Pandera). Na coleta de 30/09/2026 foram 47.357 viagens.
 
-Ao finalizar a coleta, o programa informa a quantidade de registros coletados e o diretório onde os dados foram gravados.
+Colunas criadas no tratamento (indicam o que foi preenchido pela equipe, e não medido pela fonte):
+
+| Coluna | Significado |
+| ------ | ----------- |
+| `cargo_imputado` | `cargo.descricao` estava vazio e foi preenchido com "Não informado" |
+| `descricaoPoder_imputada`, `cnpj_imputada`, `sigla_imputada`, `nome_imputada` | O bloco `unidadeGestoraResponsavel.*` estava vazio e foi preenchido pela moda |
+
+> **Atenção:** quando uma das flags `_imputada` do bloco da unidade gestora é verdadeira, os campos `unidadeGestoraResponsavel.orgaoVinculado.cnpj`, `.sigla` e `.nome` **não são confiáveis**: a moda atribui o mesmo instituto a todas essas linhas, e na maior parte delas o valor está errado. Para saber a que instituto a viagem pertence, use `orgao.sigla`, que é sempre preenchida. Filtre pelas flags antes de usar esses campos.
+
+Outras decisões do tratamento: a coluna `beneficiario.nis`, vazia em 100% dos registros, foi descartada. Em 3 viagens da unidade "Sigilosa", `beneficiario.cpfFormatado` e `cargo.codigoSIAPE` estão ausentes, e o contrato aceita isso apenas nessa unidade.
+
+### data/quarentena/
+
+O `transform.py` grava `data/quarentena/rejeitados.parquet` com as viagens que violam alguma regra do contrato, junto com a coluna `motivo` e a data de detecção (`detectado_em`). As linhas não são descartadas e podem ser reprocessadas. Na coleta de 30/09/2026 foram 2 viagens, ambas pelo motivo `devolucao_maior_que_viagem`.
+
+Ao final da execução, o script imprime a quantidade de linhas em cada pasta e o resumo por motivo.
