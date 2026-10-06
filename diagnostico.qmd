@@ -1,6 +1,6 @@
 ---
 title: "Diagnóstico do dado bruto: Viagens IFs Nordeste"
-subtitle: "Introdução à Ciência de Dados · Desafio da aula-4"
+subtitle: "Introdução à Ciência de Dados - Atividade prática da Etapa 1"
 author: "Franciele Alves da Silva - 20231SI0012, Kaillane Corrêa Martins - 20211SI0023, Samuel Chaves de Sá - 20231SI0011"
 date: today
 lang: pt-BR
