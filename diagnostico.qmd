@@ -242,9 +242,9 @@ display(q_ugr)
 
 | coluna | % ausente | tipo (MCAR/MAR/MNAR) | estratégia | justificativa |
 |:---|---:|:---|:---|:---|
-| `beneficiario.nis` | 100.0% | MCAR | Descartar a coluna | A taxa de ausência é total. Como falta para absolutamente todos os registros, não há padrão atrelado a outras colunas. A exclusão é a única via. |
+| `beneficiario.nis` | 100.0% | Não classificável | Descartar a coluna | A coluna está 100% ausente. Com ausência total, não há informação suficiente para distinguir MCAR, MAR ou MNAR; por isso, não é adequado afirmar MCAR. Como não há nenhum valor observado que possa ser utilizado, a coluna é descartada. |
 | `cargo.descricao` | 6.4% | MAR | Imputar com texto "Não informado / Sem Cargo" | A ausência não é aleatória. A Consulta 1 demonstra que essa falta se concentra em grupos específicos (possivelmente atrelada à função da pessoa, como convidados, alunos que não possuem SIAPE ou prestadores de serviço), configurando o padrão MAR (Missing At Random), onde a falta pode ser explicada por outra variável. |
-| `unidadeGestoraResponsavel.*` (bloco de 4 colunas) | 1.3% | MAR | Imputar com valores padrão (ex: EXECUTIVO, MEC) | As 4 colunas sumiram exatamente na mesma proporção. A Consulta 2 revela que a ausência é de 100% para uma ou mais Unidades Gestoras específicas (campi com cadastro defasado no painel), enquanto as demais têm 0% de nulos. Logo, a ausência depende totalmente do Campus que gerou a viagem (MAR). |
+| `unidadeGestoraResponsavel.*` (bloco de 4 colunas) | 1.3% | MAR | Substituir por "Não informado" | As 4 colunas sumiram exatamente na mesma proporção. A Consulta 2 revela que a ausência é de 100% para uma ou mais Unidades Gestoras específicas, enquanto as demais têm 0% de nulos. Como o padrão de ausência pode ser relacionado à Unidade Gestora observada, a classificação adotada é MAR. Não se deve preencher esses valores com a moda, pois isso criaria uma informação que não foi fornecida pela fonte. |
 
 <!-- **TODO:** a justificativa precisa citar a consulta acima. "Achei que era MAR" não é
 justificativa; "a taxa é 20% num grupo e 4% noutro, conforme a consulta da seção 3" é. -->
@@ -254,26 +254,32 @@ justificativa; "a taxa é 20% num grupo e 4% noutro, conforme a consulta da seç
 ```{python}
 # | label: tratamento
 
-# --- Regra de Extremos ---
-# Nota: Como as colunas que imputaremos abaixo são categóricas (texto), tratar 
-# extremos numéricos antes não altera nossos parâmetros de imputação (que usarão Moda ou Texto fixo).
+# --- Tratamento de dados ausentes ---
+# Os valores ausentes serão identificados por flags e preenchidos com o texto
+# "Não informado". Não será utilizada moda nem outra estimativa estatística.
 
-# 1. Tratamento da coluna 100% ausente (MCAR)
+# 1. Tratamento da coluna 100% ausente (classificação não determinável)
 df = df.drop(columns=["beneficiario.nis"])
 assert "beneficiario.nis" not in df.columns, "Erro: Coluna NIS não foi excluída."
 
 # 2. Tratamento de cargo.descricao (6.4% ausente - MAR)
-# Regra: Criar coluna indicadora e imputar com texto fixo
+# Regra: Criar coluna indicadora e preencher com texto fixo.
+# A conversão para string evita incompatibilidade com tipos específicos do Pandas.
 df["cargo_imputado"] = df["cargo.descricao"].isna()
-df["cargo.descricao"] = df["cargo.descricao"].fillna("Não informado")
+df["cargo.descricao"] = (
+    df["cargo.descricao"]
+    .astype("string")
+    .fillna("Não informado")
+)
 
 # Asserts para garantir que a decisão 2 funcionou
 assert df["cargo.descricao"].isna().sum() == 0, "Erro: Ainda há nulos em cargo."
 assert df["cargo_imputado"].sum() > 0, "Erro: Flag de cargo imputado não registrou nada."
 
 # 3. Tratamento do bloco unidadeGestoraResponsavel (1.3% ausente - MAR)
-# Regra: Criar colunas indicadoras e imputar com a "Moda" (o valor mais comum), 
-# já que o órgão vinculado do IFCE é praticamente sempre o mesmo (MEC/Executivo).
+# Regra: Criar colunas indicadoras e substituir os nulos por "Não informado".
+# Não utilizamos a moda, pois ela atribuiria ao registro uma informação que
+# não foi fornecida originalmente pelo Portal da Transparência.
 colunas_ugr = [
     "unidadeGestoraResponsavel.descricaoPoder",
     "unidadeGestoraResponsavel.orgaoVinculado.cnpj",
@@ -284,19 +290,25 @@ colunas_ugr = [
 for col in colunas_ugr:
     # Cria o nome da flag usando a última palavra da coluna (ex: sigla_imputada)
     nome_flag = f"{col.split('.')[-1]}_imputada"
-    
+
     # Cria a coluna indicadora OBRIGATÓRIA
     df[nome_flag] = df[col].isna()
-    
-    # Encontra a moda e preenche os nulos
-    moda_coluna = df[col].mode()[0]
-    df[col] = df[col].fillna(moda_coluna)
-    
+
+    # Converte para string antes do preenchimento.
+    # Necessário para identificadores como CNPJ, que podem estar como Int64.
+    # O CNPJ deve ser tratado como texto, não como valor numérico.
+    df[col] = (
+        df[col]
+        .astype("string")
+        .fillna("Não informado")
+    )
+
     # Asserts para garantir que a decisão 3 funcionou
     assert df[col].isna().sum() == 0, f"Erro: Nulos restantes em {col}."
     assert df[nome_flag].sum() > 0, f"Erro: Flag {nome_flag} falhou."
 
-print("Tratamento concluído! As colunas foram imputadas e os asserts passaram com sucesso.")
+print("Tratamento concluído! Os valores ausentes foram preenchidos com "
+      "'Não informado' e os asserts passaram com sucesso.")
 ```
 
 ## 5. Quarentena
@@ -309,75 +321,88 @@ import pandas as pd
 # 1. Cria a pasta de quarentena se não existir
 Path("data/quarentena").mkdir(parents=True, exist_ok=True)
 
-lista_quarentena = []
+# 2. Garante que as colunas de data estejam no formato adequado
+df["dataInicioAfastamento"] = pd.to_datetime(
+    df["dataInicioAfastamento"], errors="coerce"
+)
+df["dataFimAfastamento"] = pd.to_datetime(
+    df["dataFimAfastamento"], errors="coerce"
+)
 
-# 2. Regra 1: Valores Financeiros Negativos
-suspeitos_valor = df[df["valorTotalViagem"] < 0].copy()
-if not suspeitos_valor.empty:
-    suspeitos_valor["motivo_quarentena"] = "Valor total da viagem negativo"
-    lista_quarentena.append(suspeitos_valor)
+# 3. Identifica cada tipo de inconsistência
+regra_valor = df["valorTotalViagem"] < 0
+regra_datas = df["dataFimAfastamento"] < df["dataInicioAfastamento"]
 
-# 3. Regra 2: Datas Invertidas (Termina antes de começar)
-# Garante que as colunas estão no formato de data antes de comparar
-df["dataInicioAfastamento"] = pd.to_datetime(df["dataInicioAfastamento"], errors='coerce')
-df["dataFimAfastamento"] = pd.to_datetime(df["dataFimAfastamento"], errors='coerce')
+# 4. Seleciona cada registro uma única vez, mesmo que viole as duas regras
+mascara_quarentena = regra_valor | regra_datas
+df_quarentena = df.loc[mascara_quarentena].copy()
 
-suspeitos_datas = df[df["dataFimAfastamento"] < df["dataInicioAfastamento"]].copy()
-if not suspeitos_datas.empty:
-    suspeitos_datas["motivo_quarentena"] = "Data de fim anterior à data de início"
-    lista_quarentena.append(suspeitos_datas)
+if not df_quarentena.empty:
+    # Registra todos os motivos aplicáveis ao registro
+    motivos = []
+    for indice in df_quarentena.index:
+        motivos_registro = []
 
-# 4. Consolidar, salvar e remover da base principal
-if lista_quarentena:
-    # Junta todos os suspeitos em um único DataFrame
-    df_quarentena = pd.concat(lista_quarentena)
-    
-    # Salva na pasta com o motivo preenchido
+        if regra_valor.loc[indice]:
+            motivos_registro.append("Valor total da viagem negativo")
+
+        if regra_datas.loc[indice]:
+            motivos_registro.append("Data de fim anterior à data de início")
+
+        motivos.append("; ".join(motivos_registro))
+
+    df_quarentena["motivo_quarentena"] = motivos
+
+    # Salva os registros suspeitos
     caminho_quar = "data/quarentena/viagens_suspeitas.csv"
-    df_quarentena.to_csv(caminho_quar, index=False)
-    
-    # Remove as linhas da base principal (usando o index original das linhas suspeitas)
+    df_quarentena.to_csv(caminho_quar, index=False, encoding="utf-8")
+
+    # Remove os registros da base principal
     df = df.drop(index=df_quarentena.index).reset_index(drop=True)
-    
-    print(f"ATENÇÃO: {len(df_quarentena)} registros foram movidos para a quarentena em '{caminho_quar}'.")
+
+    print(
+        f"ATENÇÃO: {len(df_quarentena)} registros foram movidos "
+        f"para a quarentena em '{caminho_quar}'."
+    )
     display(df_quarentena[["id", "motivo_quarentena"]].head())
 else:
-    print("Nenhum registro suspeito detectado. Todos os valores financeiros são positivos e as datas seguem a ordem cronológica.")
+    print(
+        "Nenhum registro suspeito detectado. "
+        "Não foram encontrados valores financeiros negativos "
+        "nem datas de fim anteriores às datas de início."
+    )
 ```
 
-## 6. Erro da imputação, por mascaramento
+## 6. Validação do tratamento de dados ausentes
 
 ```{python}
-# | label: mascaramento
+# | label: validacao-tratamento
 
-# 1. Pegamos apenas os registros que tinham a informação original
-# Como a Seção 4 já rodou, usamos a flag para pegar só quem NÃO foi imputado
-observados = df[~df["descricaoPoder_imputada"]].copy()
+# As flags permitem confirmar que os registros originalmente ausentes
+# continuam identificáveis após o preenchimento com "Não informado".
+colunas_flags = [
+    "descricaoPoder_imputada",
+    "cnpj_imputada",
+    "sigla_imputada",
+    "nome_imputada",
+    "cargo_imputado"
+]
 
-# 2. Imitação do padrão MAR (não uniforme):
-# A ausência real ocorria por blocos de Unidade Gestora. Para simular isso com honestidade, 
-# vamos sortear 2 Campi válidos inteiros, esconder seus dados e tentar adivinhar.
-random_campi = observados["unidadeGestoraResponsavel.nome"].drop_duplicates().sample(n=2, random_state=42)
-mascarados = observados[observados["unidadeGestoraResponsavel.nome"].isin(random_campi)].copy()
+for flag in colunas_flags:
+    assert flag in df.columns, f"Erro: Flag {flag} não foi criada."
 
-# 3. Estimativa (mesma regra da Seção 4: Moda global)
-# ATENÇÃO: a moda deve ser calculada EXCLUINDO os dados que estamos escondendo!
-dados_treino = observados[~observados["unidadeGestoraResponsavel.nome"].isin(random_campi)]
-estimativa_regra = dados_treino["unidadeGestoraResponsavel.descricaoPoder"].mode()[0]
+# Confirma que nenhum valor marcado como ausente permaneceu nulo
+assert df.loc[df["cargo_imputado"], "cargo.descricao"].isna().sum() == 0
 
-# Aplica a estimativa para todas as linhas escondidas
-estimado = pd.Series(estimativa_regra, index=mascarados.index)
+for col in colunas_ugr:
+    nome_flag = f"{col.split('.')[-1]}_imputada"
+    assert df.loc[df[nome_flag], col].isna().sum() == 0
 
-# 4. Cálculo do erro
-# Como a coluna é texto, o erro é a proporção de vezes que o estimado é DIFERENTE do real.
-erros = (estimado != mascarados["unidadeGestoraResponsavel.descricaoPoder"])
-taxa_erro = erros.mean() * 100
-
-print(f"Campi mascarados para teste: {random_campi.tolist()}")
-print(f"Regra de imputação (Moda): '{estimativa_regra}'")
-print(f"Taxa de erro da imputação: {taxa_erro:.2f}%")
+print("Validação concluída: todos os registros originalmente ausentes foram "
+      "preenchidos com 'Não informado' e permanecem identificáveis pelas flags.")
 ```
+
 
 ## Fechamento
 
-Para distinguir os dados reais dos estimados, o leitor deve observar as colunas indicadoras criadas com o sufixo _imputada (como cargo_imputado e descricaoPoder_imputada). Quando essa flag booleana apresentar o valor True, significa que o dado original estava ausente na extração bruta do Portal da Transparência e foi inferido via regra de negócio ou estatística. Onde a flag for False, os valores correspondem a medições exatas e inalteradas fornecidas pelo sistema governamental.
+Para distinguir os dados originais dos campos cujo conteúdo estava ausente, o leitor deve observar as colunas indicadoras criadas no tratamento, como cargo_imputado, descricaoPoder_imputada, cnpj_imputada, sigla_imputada e nome_imputada. Quando uma dessas flags apresentar o valor True, significa que o campo correspondente estava ausente na extração bruta do Portal da Transparência e foi preenchido com "Não informado". Não foi utilizada a moda para atribuir um valor que não foi fornecido pela fonte. Quando a flag apresentar False, o valor original foi preservado. A coluna beneficiario.nis foi descartada por apresentar 100% de ausência, sem que fosse possível determinar o mecanismo responsável por essa ausência.
