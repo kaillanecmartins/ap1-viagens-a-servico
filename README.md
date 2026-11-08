@@ -140,7 +140,7 @@ Colunas criadas no tratamento (indicam o que foi preenchido pela equipe, e não 
 | `cargo_imputado` | `cargo.descricao` estava vazio e foi preenchido com "Não informado" |
 | `descricaoPoder_imputada`, `cnpj_imputada`, `sigla_imputada`, `nome_imputada` | O bloco `unidadeGestoraResponsavel.*` estava vazio e foi preenchido pela moda |
 
-> **Atenção:** quando uma das flags `_imputada` do bloco da unidade gestora é verdadeira, os campos `unidadeGestoraResponsavel.orgaoVinculado.cnpj`, `.sigla` e `.nome` **não são confiáveis**: a moda atribui o mesmo instituto a todas essas linhas, e na maior parte delas o valor está errado. Para saber a que instituto a viagem pertence, use `orgao.sigla`, que é sempre preenchida. Filtre pelas flags antes de usar esses campos.
+Para usar só os valores originais da fonte, filtre pelas flags (por exemplo, `cargo_imputado == False`). Para saber a que instituto a viagem pertence, use `orgao.sigla`, que é sempre preenchida.
 
 Outras decisões do tratamento: a coluna `beneficiario.nis`, vazia em 100% dos registros, foi descartada. Em 3 viagens da unidade "Sigilosa", `beneficiario.cpfFormatado` e `cargo.codigoSIAPE` estão ausentes, e o contrato aceita isso apenas nessa unidade.
 
