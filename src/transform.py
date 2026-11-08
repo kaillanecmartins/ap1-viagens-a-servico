@@ -133,7 +133,7 @@ CONTRATO = DataFrameSchema(
             error="data_fim_antes_do_inicio",
         ),
         # Regra de negocio 2: nao se devolve mais do que se gastou.
-        # Suposicao da equipe;
+        # Suposicao da equipe; 
         Check(
             lambda df: ~(df["valorTotalDevolucao"] > df["valorTotalViagem"]),
             error="devolucao_maior_que_viagem",
@@ -229,11 +229,14 @@ def tratar(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     df["cargo_imputado"] = df["cargo.descricao"].isna()
     df["cargo.descricao"] = df["cargo.descricao"].fillna("Não informado")
 
-    # bloco unidadeGestoraResponsavel: MAR, moda + indicadora por coluna
+    # bloco unidadeGestoraResponsavel: MAR, constante + indicadora por coluna.
+    # Sem moda: ela atribuiria o mesmo instituto a todas as linhas imputadas.
+    # astype("string") antes do fillna, para identificadores como CNPJ nao
+    # serem tratados como numero.
     for col in COLUNAS_UGR:
         flag = f"{col.split('.')[-1]}_imputada"
         df[flag] = df[col].isna()
-        df[col] = df[col].fillna(df[col].mode()[0])
+        df[col] = df[col].astype("string").fillna("Não informado")
 
     vazia = df.iloc[0:0].assign(motivo=pd.Series(dtype=str))
     return df, vazia
