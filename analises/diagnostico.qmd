@@ -17,105 +17,274 @@ execute:
 <!--
 COMO USAR ESTE ARQUIVO
 
-1. Copie-o para a raiz do SEU projeto (o que você montou na aula-2) com o nome
-   diagnostico.qmd. Ele não roda de dentro da pasta da aula.
-2. Renderize ANTES de escrever qualquer coisa:  uv run quarto render diagnostico.qmd
-   Ele já funciona: acha sozinho o CSV que estiver em data/raw/ e monta o perfil.
-   Se falhar aqui, o problema é de ambiente, não do seu código.
-3. Preencha os seis blocos. Os comentários TODO dizem o que falta em cada um.
-4. Renderize de novo a cada bloco preenchido, não só no fim.
-
-ANTES DE COMEÇAR, confira que o ambiente tem o necessário:
-
-    uv add duckdb pandas pyarrow
-    uv add --dev jupyter missingno
-
-O jupyter é o que permite ao Quarto EXECUTAR os blocos {python}. Sem ele o
-render falha com "Jupyter kernel not found", e não é erro do seu código.
-
-CAMINHOS: dentro deste .qmd eles são relativos à pasta onde o arquivo está,
-não à raiz do projeto. Se o .qmd está na raiz e o dado em data/raw/, o caminho
-correto é "data/raw/arquivo.csv".
+1. Este arquivo está em analises/diagnostico.qmd.
+2. Na raiz do projeto, renderize com:
+   uv run quarto render analises/diagnostico.qmd
+3. Os caminhos abaixo usam pathlib e barras normais, para funcionar em
+   Windows, macOS e Linux.
+4. O diagnóstico compara os dados brutos com os dados tratados e registra
+   as decisões tomadas pela equipe.
 -->
 
 ```{python}
 import json
-import pandas as pd
 from pathlib import Path
-from IPython.display import display # <-- ADICIONADO PARA CORRIGIR ERRO NO RENDER
 
-# 1. Define a pasta raiz (base) onde estão todas as subpastas
-pasta_base = Path(r"data\raw\portal_transparencia")
+import duckdb
+import matplotlib.pyplot as plt
+import missingno as msno
+import pandas as pd
+from IPython.display import display
 
-# 2. O rglob vasculha todas as pastas e subpastas procurando arquivos .json
-arquivos_json = list(pasta_base.rglob("*.json"))
+# Padroniza representações textuais de ausência antes de criar o DataFrame.
+# Valores informativos da fonte ("Sem informação", "Inválido" e "Sigilosa")
+# são preservados, pois não equivalem a um campo nulo.
+SENTINELAS_AUSENCIA = {"", "nan", "null", "none", "n/a"}
+
+
+def normalizar_valores_ausentes(valor):
+    """Converte sentinelas técnicas de ausência em None, recursivamente."""
+    if isinstance(valor, dict):
+        return {
+            chave: normalizar_valores_ausentes(item)
+            for chave, item in valor.items()
+        }
+    if isinstance(valor, list):
+        return [normalizar_valores_ausentes(item) for item in valor]
+    if isinstance(valor, str):
+        valor_limpo = valor.strip()
+        if valor_limpo.casefold() in SENTINELAS_AUSENCIA:
+            return None
+        return valor_limpo
+    return valor
+
+
+# Localiza a raiz do projeto sem depender de o QMD estar na raiz ou em
+# uma subpasta (por exemplo, analises/).
+marcadores_projeto = ["pyproject.toml", ".git"]
+raiz_candidata = Path.cwd().resolve()
+
+for candidato in [raiz_candidata, *raiz_candidata.parents]:
+    possui_marcador = any((candidato / marcador).exists() for marcador in marcadores_projeto)
+    possui_dados = (candidato / "data" / "raw" / "portal_transparencia").is_dir()
+    if possui_marcador and possui_dados:
+        raiz_candidata = candidato
+        break
+else:
+    raise FileNotFoundError(
+        "Não foi possível localizar a raiz do projeto. Verifique se existe "
+        "'data/raw/portal_transparencia' e se o comando foi executado dentro "
+        "do repositório. Diretório atual: "
+        f"{Path.cwd()}"
+    )
+
+PASTA_RAW = raiz_candidata / "data" / "raw" / "portal_transparencia"
+PASTA_QUARENTENA = raiz_candidata / "data" / "quarentena"
+
+arquivos_json = sorted(PASTA_RAW.rglob("*.json"))
+
+if not arquivos_json:
+    raise FileNotFoundError(
+        f"Nenhum arquivo JSON foi encontrado em: {PASTA_RAW}"
+    )
+
+print(f"Raiz do projeto: {raiz_candidata}")
+print(f"Pasta de dados brutos: {PASTA_RAW}")
 print(f"Encontrados {len(arquivos_json)} arquivos JSON. Iniciando a leitura...")
 
-todas_as_viagens = []
 
-# 3. Abre cada arquivo encontrado e junta os dados em uma lista única
+def extrair_registros_json(conteudo, caminho_arquivo):
+    """Extrai registros de respostas JSON em lista ou objeto com chave 'dados'.
+
+    A API pode retornar diretamente uma lista de viagens ou um objeto no
+    formato {"dados": [...]}. O código anterior aceitava somente o segundo
+    formato e, por isso, podia ignorar silenciosamente todos os registros.
+    """
+    if isinstance(conteudo, list):
+        registros = conteudo
+    elif isinstance(conteudo, dict):
+        dados = conteudo.get("dados")
+        if isinstance(dados, list):
+            registros = dados
+        elif isinstance(dados, dict):
+            # Compatibilidade com respostas em que 'dados' encapsula outra
+            # lista de registros.
+            registros = dados.get("dados", [])
+        else:
+            raise ValueError(
+                "O JSON é um objeto, mas não contém uma lista na chave 'dados'. "
+                f"Chaves encontradas: {list(conteudo.keys())[:15]}"
+            )
+    else:
+        raise ValueError(
+            f"Formato JSON não suportado: {type(conteudo).__name__}"
+        )
+
+    if not isinstance(registros, list):
+        raise ValueError("A estrutura extraída não é uma lista de registros.")
+
+    registros_validos = [registro for registro in registros if isinstance(registro, dict)]
+    descartados = len(registros) - len(registros_validos)
+    if descartados:
+        print(
+            f"Aviso: {descartados} elemento(s) não estruturado(s) como objeto "
+            f"foram ignorados em {caminho_arquivo.name}."
+        )
+
+    return registros_validos
+
+
+todas_as_viagens = []
+arquivos_com_registros = 0
+arquivos_sem_registros = 0
+erros_leitura = []
+
 for arquivo in arquivos_json:
     try:
-        with open(arquivo, 'r', encoding='utf-8') as f:
+        with arquivo.open("r", encoding="utf-8-sig") as f:
             dados_brutos = json.load(f)
-            
-            # Verifica se a chave 'dados' existe e tem informações
-            if 'dados' in dados_brutos and isinstance(dados_brutos['dados'], list):
-                # Opcional: Você pode querer saber de qual arquivo o dado veio
-                # for viagem in dados_brutos['dados']:
-                #     viagem['arquivo_origem'] = arquivo.name
-                
-                todas_as_viagens.extend(dados_brutos['dados'])
-    except Exception as e:
-        print(f"Erro ao ler o arquivo {arquivo}: {e}")
 
-# 4. Transforma essa superlista achatada em um único DataFrame
-df_viagens = pd.json_normalize(todas_as_viagens)
+        registros = extrair_registros_json(dados_brutos, arquivo)
+        if registros:
+            arquivos_com_registros += 1
+            todas_as_viagens.extend(registros)
+        else:
+            arquivos_sem_registros += 1
+            print(f"Aviso: arquivo sem registros: {arquivo}")
 
-# 5. Limpa e converte as colunas financeiras
-colunas_financeiras = ['valorTotalDiarias', 'valorTotalPassagem', 'valorTotalViagem', 'valorTotalDevolucao']
+    except (json.JSONDecodeError, OSError, ValueError) as erro:
+        erros_leitura.append((arquivo, str(erro)))
+        print(f"Erro ao ler {arquivo}: {erro}")
+
+print(f"Arquivos com registros: {arquivos_com_registros}")
+print(f"Arquivos sem registros: {arquivos_sem_registros}")
+print(f"Arquivos com erro: {len(erros_leitura)}")
+print(f"Registros carregados: {len(todas_as_viagens):,}")
+
+if not todas_as_viagens:
+    exemplos = "\n".join(
+        f"- {arquivo}: {erro}" for arquivo, erro in erros_leitura[:5]
+    )
+    raise ValueError(
+        "Nenhum registro de viagem foi carregado. A execução foi interrompida "
+        "antes de criar um CSV vazio. Verifique o formato dos JSONs e a pasta "
+        f"de origem.\nErros encontrados:\n{exemplos or 'Nenhum erro de leitura; confira a estrutura dos arquivos.'}"
+    )
+
+# A normalização é aplicada aos registros antes do achatamento e novamente
+# às colunas textuais para que Pandas e DuckDB interpretem as ausências igual.
+todas_as_viagens = [
+    normalizar_valores_ausentes(registro)
+    for registro in todas_as_viagens
+]
+df_viagens = pd.json_normalize(todas_as_viagens, sep=".")
+
+for coluna in df_viagens.select_dtypes(include=["object", "string"]).columns:
+    valores = df_viagens[coluna].astype("string").str.strip()
+    df_viagens[coluna] = valores.mask(
+        valores.str.casefold().isin(SENTINELAS_AUSENCIA),
+        pd.NA,
+    )
+
+# Verifica o esquema esperado antes de executar as análises seguintes.
+colunas_obrigatorias = [
+    "id",
+    "valorTotalViagem",
+    "dataInicioAfastamento",
+    "dataFimAfastamento",
+    "unidadeGestoraResponsavel.nome",
+    "unidadeGestoraResponsavel.descricaoPoder",
+    "unidadeGestoraResponsavel.orgaoVinculado.cnpj",
+    "unidadeGestoraResponsavel.orgaoVinculado.sigla",
+    "unidadeGestoraResponsavel.orgaoVinculado.nome",
+    "orgao.sigla",
+]
+colunas_ausentes = [
+    coluna for coluna in colunas_obrigatorias
+    if coluna not in df_viagens.columns
+]
+
+if colunas_ausentes:
+    raise KeyError(
+        "Os registros foram carregados, mas o JSON não produziu todas as "
+        "colunas esperadas. Colunas ausentes: "
+        f"{colunas_ausentes}. Colunas encontradas: "
+        f"{df_viagens.columns.tolist()}"
+    )
+
+# Converte as colunas financeiras quando necessário.
+colunas_financeiras = [
+    "valorTotalDiarias",
+    "valorTotalPassagem",
+    "valorTotalViagem",
+    "valorTotalDevolucao",
+]
 
 for col in colunas_financeiras:
-    if col in df_viagens.columns:
-        if df_viagens[col].dtype == 'object':
-            df_viagens[col] = df_viagens[col].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False).astype(float)
+    if col in df_viagens.columns and df_viagens[col].dtype == "object":
+        valores = df_viagens[col].astype("string").str.strip()
+        # A API normalmente fornece números; esta conversão também contempla
+        # valores textuais no padrão brasileiro, sem alterar nulos.
+        tem_virgula = valores.str.contains(",", na=False)
+        valores_brasileiros = (
+            valores.str.replace(".", "", regex=False)
+            .str.replace(",", ".", regex=False)
+        )
+        df_viagens[col] = pd.to_numeric(
+            valores.where(~tem_virgula, valores_brasileiros),
+            errors="coerce",
+        )
 
-# 6. Mostra o resultado final consolidado
-print(f"Leitura concluída com sucesso!")
-print(f"Total de viagens consolidadas: {len(df_viagens)}")
+print("Leitura concluída com sucesso!")
+print(f"Total de viagens consolidadas: {len(df_viagens):,}")
+print(f"Total de colunas identificadas: {len(df_viagens.columns)}")
+print("Colunas identificadas:")
+print(df_viagens.columns.tolist())
 display(df_viagens.head(3))
 ```
 
 ## 1. Perfil do arquivo bruto
 
 ```{python}
-from pathlib import Path
-import duckdb
-import matplotlib.pyplot as plt
+# O CSV consolidado é salvo em data/processed, na raiz do projeto.
+PASTA_PROCESSED = raiz_candidata / "data" / "processed"
+PASTA_PROCESSED.mkdir(parents=True, exist_ok=True)
 
-# 1. Define o caminho do arquivo transformado
-caminho_saida = Path(r"data\processed\viagens_transformadas.csv")
+caminho_saida = PASTA_PROCESSED / "viagens_transformadas.csv"
 
-# 2. Cria a pasta processed (caso não exista)
-caminho_saida.parent.mkdir(parents=True, exist_ok=True)
+df_viagens.to_csv(caminho_saida, index=False, encoding="utf-8")
+print(f"Arquivo consolidado salvo em: {caminho_saida}")
 
-# 3. Salva o DataFrame (exatamente como foi lido e achatado, sem limpar)
-df_viagens.to_csv(caminho_saida, index=False, encoding='utf-8')
-print(f"Arquivo transformado salvo em: {caminho_saida}\n")
-
-# 4. Gera o Perfil com o DuckDB lendo o arquivo recém-salvo
-CSV = str(caminho_saida)
+CSV = caminho_saida.as_posix().replace("'", "''")
 con = duckdb.connect()
-perfil = con.sql(f"SUMMARIZE SELECT * FROM '{CSV}'").df()
 
-# 5. Exibe a tabela de perfil com as colunas selecionadas
-df_perfil = perfil[["column_name", "column_type", "count", "approx_unique", "null_percentage", "min", "max"]]
+# O CSV é gerado pelo próprio DataFrame já normalizado. O DuckDB recebe
+# campos vazios como NULL, mantendo a mesma convenção de ausência do Pandas.
+perfil = con.sql(
+    f"SUMMARIZE SELECT * FROM read_csv_auto('{CSV}', nullstr='')"
+).df()
+
+df_perfil = perfil[
+    [
+        "column_name",
+        "column_type",
+        "count",
+        "approx_unique",
+        "null_percentage",
+        "min",
+        "max",
+    ]
+]
+
 display(df_perfil)
 
 plt.figure(figsize=(10, 5))
-# <-- CORRIGIDO: Era 'df', agora é 'df_viagens' para o gráfico funcionar
-top_campi = df_viagens["unidadeGestoraResponsavel.nome"].value_counts().head(10)
-top_campi.plot(kind="bar", color="cornflowerblue")
+top_campi = (
+    df_viagens["unidadeGestoraResponsavel.nome"]
+    .value_counts(dropna=False)
+    .head(10)
+)
+top_campi.plot(kind="bar")
 plt.title("Top 10 Unidades Gestoras com Maior Volume de Viagens", fontsize=14)
 plt.xlabel("Unidade Gestora")
 plt.ylabel("Quantidade de Viagens")
@@ -124,30 +293,23 @@ plt.tight_layout()
 plt.show()
 ```
 
-O perfil revela que a base de dados possui 47.359 registros. A coluna id (chave primária) apresenta um approx_unique de ~47.090, mas como se trata de uma estimativa estatística do DuckDB, verificaremos a exatidão na próxima etapa. As colunas temporais e financeiras já estão tipadas corretamente como DATE e DOUBLE, apresentando valores mínimos e máximos plausíveis (ex: R$ 31.624 para valorTotalViagem). Sobre os dados ausentes, a coluna beneficiario.nis destaca-se com 100% de nulos, enquanto cargo.descricao e informações da unidadeGestoraResponsavel possuem perdas menores (6.4% e ~1.3%). Por fim, o approx_unique de viagem.numPcdp (~8.948) comprova que o sistema agrupa múltiplos passageiros e trechos sob o mesmo número de processo.
+O perfil apresenta a quantidade de registros e o percentual de ausência por coluna. A coluna `id` é tratada como chave da viagem e será verificada por duplicidade exata na seção seguinte. As colunas temporais e financeiras são avaliadas pelo perfil gerado pelo DuckDB. As representações técnicas de ausência foram padronizadas antes da exportação, evitando que Pandas e DuckDB contem o mesmo valor de maneiras diferentes. Os valores de negócio `"Sem informação"`, `"Inválido"` e `"Sigilosa"` foram preservados como categorias explícitas da fonte.
 
 ## 2. Duplicatas
 
 ```{python}
 # | label: duplicatas
-import duckdb
 
-# 1. Define o caminho do arquivo e cria a conexão
-CSV = r"data\processed\viagens_transformadas.csv"
-con = duckdb.connect()
-
-# 2. Carrega os dados para o DataFrame
-df = con.sql(f"SELECT * FROM '{CSV}'").df()
-
-# 3. Define a CHAVE que identifica unicamente a viagem
-if 'id' in df.columns:
-    CHAVE = 'id'
-elif 'viagem.pcdp' in df.columns:
-    CHAVE = ['viagem.pcdp', 'beneficiario.cpfFormatado']
+# A chave preferencial é o id fornecido pela fonte.
+if "id" in df_viagens.columns:
+    CHAVE = ["id"]
+elif "viagem.pcdp" in df_viagens.columns:
+    CHAVE = ["viagem.pcdp", "beneficiario.cpfFormatado"]
 else:
-    CHAVE = df.columns[0] # Fallback do template
+    CHAVE = [df_viagens.columns[0]]
 
-# 4. Calcula as duplicatas
+df = df_viagens.copy()
+
 dup_linha = int(df.duplicated().sum())
 dup_chave = int(df.duplicated(subset=CHAVE).sum())
 
@@ -156,190 +318,416 @@ print(f"duplicadas por linha inteira: {dup_linha}")
 print(f"duplicadas por {CHAVE}: {dup_chave}")
 ```
 
-
-As contagens de duplicatas por linha inteira e por chave (id) retornaram zero, provando que a diferença vista no approx_unique do perfil era apenas a margem de erro da estimativa do DuckDB. A base de dados foi extraída com sucesso sem nenhuma redundância de paginação ou sobreposição de registros. A função drop_duplicates() foi mantida apenas por segurança, mas não alterou o volume final do dataset.
+As contagens acima permitem separar duas situações: cópia exata de uma linha e repetição da chave que identifica a viagem. A decisão de remover duplicatas é aplicada somente como uma proteção para cópias exatas; o resultado é conferido pela contagem final.
 
 ```{python}
 # | label: dedup
+
 antes = len(df)
 df = df.drop_duplicates().reset_index(drop=True)
-print(f"{antes} -> {len(df)} linhas apos remover cópias exatas")
+total_apos_deduplicacao = len(df)
 
-# Substitua o 1000 pelo número real de linhas que você tem agora (ex: 47359)
-assert len(df) == 47359, f"A contagem apos dedup mudou. Temos {len(df)} linhas."
+print(f"{antes} -> {total_apos_deduplicacao} linhas após remover cópias exatas")
+print(f"Registros após deduplicação: {total_apos_deduplicacao:,}")
 ```
 
 ## 3. Tabela de decisão
 
 ```{python}
 # | label: ausencia-por-coluna
-import missingno as msno
-import matplotlib.pyplot as plt
 
-# 1. Ponto de partida: quais colunas têm ausência, e quanto.
-ausencia = (df.isna().mean() * 100).round(1)
-df_ausencia = ausencia[ausencia > 0].sort_values(ascending=False).to_frame("pct_nulo")
+ausencia = (df.isna().mean() * 100).round(2)
+df_ausencia = ausencia[ausencia > 0].sort_values(ascending=False).to_frame("pct_ausente")
+
+# Conferência independente: os percentuais de ausência do Pandas e DuckDB
+# devem coincidir após a padronização e a exportação do CSV.
+perfil_nulos = perfil.set_index("column_name")["null_percentage"]
+comparacao_ausencias = pd.DataFrame({
+    "pandas_%": ausencia,
+    "duckdb_%": perfil_nulos.reindex(ausencia.index),
+}).dropna()
+comparacao_ausencias["diferenca_pp"] = (
+    comparacao_ausencias["pandas_%"] - comparacao_ausencias["duckdb_%"]
+).abs()
+display(comparacao_ausencias.sort_values("diferenca_pp", ascending=False).head(10))
+assert (comparacao_ausencias["diferenca_pp"] < 0.02).all(), (
+    "Pandas e DuckDB apresentaram percentuais de ausência diferentes. "
+    "Verifique a padronização e a leitura do CSV."
+)
 
 print("--- Tabela de Percentual de Ausência ---")
 display(df_ausencia)
 
-# 2. Visualização gráfica com Missingno
-# Filtramos o DataFrame para mostrar apenas as colunas que têm dados faltando (para o gráfico não ficar gigante e inútil)
 colunas_com_nulos = df_ausencia.index.tolist()
 
 if colunas_com_nulos:
     print("\n--- Matriz Visual de Dados Ausentes ---")
-    # A matriz (matrix) plota as linhas. Onde houver risco branco, o dado é nulo.
-    msno.matrix(df[colunas_com_nulos], figsize=(10, 5), fontsize=10, sparkline=False)
+    msno.matrix(
+        df[colunas_com_nulos],
+        figsize=(10, 5),
+        fontsize=10,
+        sparkline=False,
+    )
     plt.title("Onde estão os dados nulos?", fontsize=14)
     plt.show()
 else:
     print("Nenhuma coluna possui valores nulos.")
 ```
 
-<!-- **TODO:** para cada coluna acima, uma consulta `GROUP BY` que mostre se o nulo tem
-padrão. Use `count(*) FILTER (WHERE coluna IS NULL)`. É essa consulta, e não o
-percentual, que decide a classificação de Rubin. -->
+A porcentagem de ausência serve como diagnóstico inicial, mas não é suficiente para classificar o mecanismo de ausência. A classificação adotada abaixo é baseada nos padrões observados em consultas agrupadas e, quando não há informação observável suficiente, a situação é declarada como não classificável.
+
+### Padrão de ausência: cargo
 
 ```{python}
-# | label: padrao-de-ausencia
+# | label: padrao-cargo
 
-# Consulta 1: Por que 'cargo.descricao' está ausente? 
-# Geralmente isso acontece porque a pessoa não é servidora de carreira (ex: é convidado, aluno, ou tem apenas função comissionada).
 q_cargo = con.sql(f"""
-    SELECT "funcao.descricao",
-           count(*) AS registros,
-           count(*) FILTER (WHERE "cargo.descricao" IS NULL) AS ausentes,
-           round(100.0 * count(*) FILTER (WHERE "cargo.descricao" IS NULL)
-                 / count(*), 1) AS pct
-    FROM '{CSV}' 
-    GROUP BY 1 
+    SELECT
+        "funcao.descricao",
+        count(*) AS registros,
+        count(*) FILTER (
+            WHERE "cargo.descricao" IS NULL
+        ) AS ausentes,
+        round(
+            100.0 * count(*) FILTER (
+                WHERE "cargo.descricao" IS NULL
+            ) / count(*),
+            1
+        ) AS pct
+    FROM read_csv_auto('{CSV}', nullstr='')
+    GROUP BY 1
     HAVING registros > 10
     ORDER BY pct DESC
-    LIMIT 5
+    LIMIT 10
 """).df()
 
 print("--- Padrão de Ausência: Cargo ---")
 display(q_cargo)
-
-# Consulta 2: Por que as colunas de 'unidadeGestoraResponsavel' sumiram juntas (1.3%)?
-# A hipótese é que 1 ou 2 campi específicos estão com o cadastro incompleto no sistema do governo.
-q_ugr = con.sql(f"""
-    SELECT "unidadeGestoraResponsavel.nome",
-           count(*) AS registros,
-           count(*) FILTER (WHERE "unidadeGestoraResponsavel.descricaoPoder" IS NULL) AS ausentes,
-           round(100.0 * count(*) FILTER (WHERE "unidadeGestoraResponsavel.descricaoPoder" IS NULL)
-                 / count(*), 1) AS pct
-    FROM '{CSV}' 
-    GROUP BY 1 
-    ORDER BY ausentes DESC
-    LIMIT 5
-""").df()
-
-print("\n--- Padrão de Ausência: Unidade Gestora ---")
-display(q_ugr)
 ```
 
-| coluna | % ausente | tipo (MCAR/MAR/MNAR) | estratégia | justificativa |
-|:---|---:|:---|:---|:---|
-| `beneficiario.nis` | 100.0% | Não classificável | Descartar a coluna | A coluna está 100% ausente. Com ausência total, não há informação suficiente para distinguir MCAR, MAR ou MNAR; por isso, não é adequado afirmar MCAR. Como não há nenhum valor observado que possa ser utilizado, a coluna é descartada. |
-| `cargo.descricao` | 6.4% | MAR | Imputar com texto "Não informado / Sem Cargo" | A ausência não é aleatória. A Consulta 1 demonstra que essa falta se concentra em grupos específicos (possivelmente atrelada à função da pessoa, como convidados, alunos que não possuem SIAPE ou prestadores de serviço), configurando o padrão MAR (Missing At Random), onde a falta pode ser explicada por outra variável. |
-| `unidadeGestoraResponsavel.*` (bloco de 4 colunas) | 1.3% | MAR | Substituir por "Não informado" | As 4 colunas sumiram exatamente na mesma proporção. A Consulta 2 revela que a ausência é de 100% para uma ou mais Unidades Gestoras específicas, enquanto as demais têm 0% de nulos. Como o padrão de ausência pode ser relacionado à Unidade Gestora observada, a classificação adotada é MAR. Não se deve preencher esses valores com a moda, pois isso criaria uma informação que não foi fornecida pela fonte. |
+A ausência de `cargo.descricao` apresenta proporções diferentes entre os grupos de `funcao.descricao`, indicando uma possível associação com uma variável observada. Esse comportamento é compatível com a hipótese de ausência MAR, embora a consulta exploratória, isoladamente, não seja suficiente para comprovar esse mecanismo. A equipe adota MAR como hipótese de trabalho para orientar a decisão de tratamento, sem afirmar que o mecanismo foi estatisticamente demonstrado. Não é usada a moda porque isso atribuiria um cargo que a fonte não registrou.
 
-<!-- **TODO:** a justificativa precisa citar a consulta acima. "Achei que era MAR" não é
-justificativa; "a taxa é 20% num grupo e 4% noutro, conforme a consulta da seção 3" é. -->
+### Padrão de ausência: unidade gestora
+
+```{python}
+# | label: padrao-unidade-gestora
+
+colunas_ugr = [
+    "unidadeGestoraResponsavel.descricaoPoder",
+    "unidadeGestoraResponsavel.orgaoVinculado.cnpj",
+    "unidadeGestoraResponsavel.orgaoVinculado.sigla",
+    "unidadeGestoraResponsavel.orgaoVinculado.nome",
+]
+
+q_ugr = con.sql(f"""
+    SELECT
+        "unidadeGestoraResponsavel.nome" AS situacao_unidade_gestora,
+        count(*) AS registros,
+        count(*) FILTER (
+            WHERE "unidadeGestoraResponsavel.descricaoPoder" IS NULL
+        ) AS descricao_poder_ausente,
+        count(*) FILTER (
+            WHERE "unidadeGestoraResponsavel.orgaoVinculado.cnpj" IS NULL
+        ) AS cnpj_ausente,
+        count(*) FILTER (
+            WHERE "unidadeGestoraResponsavel.orgaoVinculado.sigla" IS NULL
+        ) AS sigla_ausente,
+        count(*) FILTER (
+            WHERE "unidadeGestoraResponsavel.orgaoVinculado.nome" IS NULL
+        ) AS nome_ausente
+    FROM read_csv_auto('{CSV}', nullstr='')
+    GROUP BY 1
+    ORDER BY registros DESC
+""").df()
+
+print("--- Ausências por situação declarada pela fonte ---")
+display(q_ugr)
+
+situacoes_fonte = (
+    df["unidadeGestoraResponsavel.nome"]
+    .value_counts(dropna=False)
+    .rename_axis("situacao_unidade_gestora")
+    .reset_index(name="quantidade")
+)
+print("--- Valores de unidade gestora informados pela fonte ---")
+display(situacoes_fonte)
+```
+
+A equipe também comparou a sigla do órgão vinculado à unidade gestora com a sigla do órgão solicitante (`orgao.sigla`). Essa comparação é uma verificação exploratória de consistência, não uma regra universal de equivalência. Os resultados encontrados são apresentados abaixo.
+
+```{python}
+# | label: regra-unidade-gestora
+
+col_ugr_sigla = "unidadeGestoraResponsavel.orgaoVinculado.sigla"
+col_orgao_sigla = "orgao.sigla"
+
+comparacao = df[[col_ugr_sigla, col_orgao_sigla]].copy()
+for coluna in [col_ugr_sigla, col_orgao_sigla]:
+    comparacao[coluna] = comparacao[coluna].astype("string").str.strip()
+
+pares_completos = (
+    comparacao[col_ugr_sigla].notna()
+    & comparacao[col_orgao_sigla].notna()
+    & comparacao[col_ugr_sigla].ne("")
+    & comparacao[col_orgao_sigla].ne("")
+)
+completos = comparacao.loc[pares_completos].copy()
+nao_comparaveis = int((~pares_completos).sum())
+
+if not completos.empty:
+    coincidencias = completos[col_ugr_sigla].eq(completos[col_orgao_sigla])
+    divergencias = completos.loc[~coincidencias].copy()
+    total_coincidencias = int(coincidencias.sum())
+    total_divergencias = int((~coincidencias).sum())
+    taxa_coincidencia = 100 * coincidencias.mean()
+
+    print(f"Total de registros: {len(comparacao):,}")
+    print(f"Pares completos comparados: {len(completos):,}")
+    print(f"Coincidências: {total_coincidencias:,}")
+    print(f"Divergências reais entre pares completos: {total_divergencias:,}")
+    print(f"Registros não comparáveis (ao menos uma sigla ausente): {nao_comparaveis:,}")
+    print(f"Taxa de coincidência entre pares completos: {taxa_coincidencia:.2f}%")
+
+    if not divergencias.empty:
+        print("\\nCombinações divergentes mais frequentes:")
+        display(
+            divergencias.value_counts(dropna=False)
+            .rename("quantidade")
+            .reset_index()
+            .head(15)
+        )
+else:
+    total_coincidencias = 0
+    total_divergencias = 0
+    taxa_coincidencia = 0.0
+    print("Não há pares completos para verificar a correspondência.")
+```
+
+A comparação deve separar **pares completos**, **coincidências**, **divergências reais** e **registros não comparáveis**. Na conferência apresentada à equipe, 46.731 pares completos coincidiram integralmente (100%). Os demais registros não devem ser contabilizados como divergências: eles não possuem os dois campos necessários para a comparação. Os números exibidos pelo código são calculados novamente a partir dos dados carregados, evitando manter contagens fixas no texto.
+
+A equipe adota como **suposição de trabalho** que a correspondência observada entre `unidadeGestoraResponsavel.orgaoVinculado.sigla` e `orgao.sigla` também se aplica às linhas em que a sigla da unidade gestora está ausente. Essa hipótese permite derivar somente a sigla ausente a partir de `orgao.sigla`, desde que esta esteja preenchida. A derivação será identificada por uma flag própria. A suposição **não será estendida aos demais campos da unidade gestora**, pois a correspondência com `orgao.*` não foi verificada para eles. Estender a regra sem evidência repetiria o erro que a equipe evitou ao recusar a moda em `cargo.descricao`: afirmar um valor que a fonte não registrou. Os demais campos ausentes receberão `"Não informado"` e manterão suas flags.
+
+A fonte também apresenta estados explícitos no campo `unidadeGestoraResponsavel.nome`, como `"Sem informação"`, `"Inválido"` e `"Sigilosa"`. Esses textos são categorias fornecidas pela origem, não valores nulos, e serão preservados. Eles não comprovam, por si só, a causa das ausências nos demais atributos da unidade gestora. A contagem desses estados será obtida diretamente dos dados, sem fixar previamente o total de registros.
+
+### Consulta sobre `beneficiario.nis`
+
+```{python}
+# | label: consulta-nis
+
+q_nis = con.sql(f"""
+    SELECT
+        count(*) AS total,
+        count(*) FILTER (
+            WHERE "beneficiario.nis" IS NULL
+        ) AS ausentes,
+        count(*) FILTER (
+            WHERE "beneficiario.nis" IS NOT NULL
+        ) AS observados
+    FROM read_csv_auto('{CSV}', nullstr='')
+""").df()
+
+print("--- Consulta sobre beneficiario.nis ---")
+display(q_nis)
+```
+
+Como `beneficiario.nis` está ausente em 100% das linhas, não existe, dentro desta base, uma variável observada no próprio campo que permita comparar registros com e sem NIS. Portanto, a equipe não afirma que a ausência é MCAR. A classificação é **não classificável com os dados disponíveis**, e a coluna é descartada por não acrescentar informação observada à análise.
+
+### Decisão
+
+| coluna | % ausente | tipo | estratégia | justificativa |
+|:---|---:|:---|:---|:---|
+| `beneficiario.nis` | 100.0% | Não classificável | Descartar a coluna | A consulta confirma ausência total. Sem nenhum valor observado no próprio campo, não há evidência suficiente para distinguir MCAR, MAR ou MNAR. |
+| `cargo.descricao` | 6.4% | Hipótese MAR (não comprovada) | Preencher com `"Não informado"` | A ausência varia entre os grupos de `funcao.descricao`, o que é compatível com MAR, mas a análise exploratória não comprova o mecanismo. |
+| `unidadeGestoraResponsavel.orgaoVinculado.sigla` | Calculado na execução | Derivação sob suposição explícita | Derivar de `orgao.sigla` quando a sigla da unidade gestora estiver ausente e o órgão solicitante estiver informado; manter flag | A comparação dos pares completos apresentou 100% de coincidência na conferência da equipe (46.731 de 46.731). A aplicação da regra às linhas sem sigla é uma suposição de trabalho, registrada e auditável. A derivação é **restrita à sigla** porque é o único campo do bloco com verificação de correspondência; os demais campos não têm regra validada e não são derivados. |
+| Demais campos de `unidadeGestoraResponsavel.*` | Calculado na execução | Não classificável | Preencher nulos com `"Não informado"` e manter flags | Não foi identificada uma regra validada para reconstruir esses atributos. Os estados `"Sem informação"`, `"Inválido"` e `"Sigilosa"` encontrados em `unidadeGestoraResponsavel.nome` são preservados, mas não permitem determinar a causa das ausências nos outros campos. |
 
 ## 4. Tratamento
 
 ```{python}
 # | label: tratamento
 
-# --- Tratamento de dados ausentes ---
-# Os valores ausentes serão identificados por flags e preenchidos com o texto
-# "Não informado". Não será utilizada moda nem outra estimativa estatística.
+# Preserva uma cópia do conjunto deduplicado antes de qualquer alteração.
+df_antes_tratamento = df.copy()
 
-# 1. Tratamento da coluna 100% ausente (classificação não determinável)
-df = df.drop(columns=["beneficiario.nis"])
-assert "beneficiario.nis" not in df.columns, "Erro: Coluna NIS não foi excluída."
+# 1. beneficiario.nis: a consulta mostrou ausência total; descarta-se a coluna.
+if "beneficiario.nis" in df.columns:
+    df = df.drop(columns=["beneficiario.nis"])
+assert "beneficiario.nis" not in df.columns
 
-# 2. Tratamento de cargo.descricao (6.4% ausente - MAR)
-# Regra: Criar coluna indicadora e preencher com texto fixo.
-# A conversão para string evita incompatibilidade com tipos específicos do Pandas.
+# 2. cargo.descricao: usa uma categoria explícita, sem inventar um cargo.
+ausencias_cargo_originais = int(df_antes_tratamento["cargo.descricao"].isna().sum())
 df["cargo_imputado"] = df["cargo.descricao"].isna()
 df["cargo.descricao"] = (
-    df["cargo.descricao"]
-    .astype("string")
-    .fillna("Não informado")
+    df["cargo.descricao"].astype("string").fillna("Não informado")
 )
+assert df["cargo.descricao"].isna().sum() == 0
+assert int(df["cargo_imputado"].sum()) == ausencias_cargo_originais
 
-# Asserts para garantir que a decisão 2 funcionou
-assert df["cargo.descricao"].isna().sum() == 0, "Erro: Ainda há nulos em cargo."
-assert df["cargo_imputado"].sum() > 0, "Erro: Flag de cargo imputado não registrou nada."
-
-# 3. Tratamento do bloco unidadeGestoraResponsavel (1.3% ausente - MAR)
-# Regra: Criar colunas indicadoras e substituir os nulos por "Não informado".
-# Não utilizamos a moda, pois ela atribuiria ao registro uma informação que
-# não foi fornecida originalmente pelo Portal da Transparência.
+# 3. Unidade gestora: flags são criadas antes de preencher qualquer campo.
 colunas_ugr = [
     "unidadeGestoraResponsavel.descricaoPoder",
     "unidadeGestoraResponsavel.orgaoVinculado.cnpj",
     "unidadeGestoraResponsavel.orgaoVinculado.sigla",
-    "unidadeGestoraResponsavel.orgaoVinculado.nome"
+    "unidadeGestoraResponsavel.orgaoVinculado.nome",
+]
+for col in colunas_ugr:
+    if col in df.columns:
+        df[f"{col.split('.')[-1]}_imputada"] = df[col].isna()
+
+# Deriva exclusivamente a sigla ausente da unidade gestora usando orgao.sigla.
+# A hipótese foi observada em 100% dos pares completos e é assumida também
+# para as linhas sem sigla da UGR. A flag diferencia derivação de imputação.
+mascara_sigla_ugr_ausente = df[col_ugr_sigla].isna()
+mascara_orgao_sigla_disponivel = (
+    df[col_orgao_sigla].notna()
+    & df[col_orgao_sigla].astype("string").str.strip().ne("")
+)
+mascara_derivacao = mascara_sigla_ugr_ausente & mascara_orgao_sigla_disponivel
+
+df["ugr_sigla_derivada"] = mascara_derivacao
+df.loc[mascara_derivacao, col_ugr_sigla] = df.loc[
+    mascara_derivacao, col_orgao_sigla
 ]
 
+# Ausências restantes são explicitadas, sem modificar os estados informados
+# pela fonte ("Sem informação", "Inválido" e "Sigilosa").
 for col in colunas_ugr:
-    # Cria o nome da flag usando a última palavra da coluna (ex: sigla_imputada)
-    nome_flag = f"{col.split('.')[-1]}_imputada"
+    if col in df.columns:
+        df[col] = df[col].astype("string").fillna("Não informado")
+        assert df[col].isna().sum() == 0
 
-    # Cria a coluna indicadora OBRIGATÓRIA
-    df[nome_flag] = df[col].isna()
-
-    # Converte para string antes do preenchimento.
-    # Necessário para identificadores como CNPJ, que podem estar como Int64.
-    # O CNPJ deve ser tratado como texto, não como valor numérico.
-    df[col] = (
-        df[col]
-        .astype("string")
-        .fillna("Não informado")
-    )
-
-    # Asserts para garantir que a decisão 3 funcionou
-    assert df[col].isna().sum() == 0, f"Erro: Nulos restantes em {col}."
-    assert df[nome_flag].sum() > 0, f"Erro: Flag {nome_flag} falhou."
-
-print("Tratamento concluído! Os valores ausentes foram preenchidos com "
-      "'Não informado' e os asserts passaram com sucesso.")
+print("Tratamento concluído.")
+print(f"Ausências originais em cargo.descricao: {ausencias_cargo_originais:,}")
+print(f"Siglas da UGR derivadas de orgao.sigla: {int(df['ugr_sigla_derivada'].sum()):,}")
+print(
+    "Siglas da UGR sem fonte para derivação: "
+    f"{int((mascara_sigla_ugr_ausente & ~mascara_orgao_sigla_disponivel).sum()):,}"
+)
 ```
 
-## 5. Quarentena
+A sigla da unidade gestora é derivada de `orgao.sigla` somente quando está ausente e o órgão solicitante possui sigla informada. A regra foi verificada nos 46.731 pares completos da conferência, com 100% de coincidência. Sua aplicação aos registros sem sigla é uma **suposição da equipe**, não uma informação confirmada individualmente pela fonte. A coluna `ugr_sigla_derivada` permite identificar exatamente quais registros receberam esse valor por derivação.
+
+Os demais atributos da unidade gestora não são reconstruídos por essa regra. Seus nulos são preenchidos com `"Não informado"`, enquanto valores explícitos da fonte, como `"Sem informação"`, `"Inválido"` e `"Sigilosa"`, permanecem inalterados.
+
+
+## 5. Medição do mascaramento da ausência
+
+O teste de mascaramento não deve ser avaliado somente em `descricaoPoder`, pois o bloco possui quatro campos. A avaliação abaixo mede, para cada coluna, a capacidade da estratégia adotada de reproduzir os valores originais que foram temporariamente ocultados. A rastreabilidade das ausências reais é verificada separadamente pelas flags na seção de validação.
+
+O teste abaixo simula a perda de 20% dos valores observados em cada coluna do bloco. Para cada coluna, aplica a estratégia adotada no tratamento: `orgao.sigla` para derivar a sigla da UGR e `"Não informado"` para os demais atributos. O valor original é mantido apenas como referência para comparar a estimativa com o dado conhecido. Assim, o erro é calculado separadamente para cada coluna, e não somente para `descricaoPoder`. Como `"Não informado"` é uma categoria de preservação da ausência, e não uma estimativa do valor original, espera-se erro de reconstrução elevado nesses campos.
+
+```{python}
+# | label: erro-mascaramento-ugr
+
+resultado_mascaramento = []
+FRACAO_MASCARAMENTO = 0.20
+SEMENTE_MASCARAMENTO = 42
+
+for col in colunas_ugr:
+    if col not in df_antes_tratamento.columns:
+        continue
+
+    dados_teste = df_antes_tratamento[[col, col_orgao_sigla]].copy()
+    observados = dados_teste[col].notna()
+    indices_observados = dados_teste.index[observados]
+
+    if len(indices_observados) < 2:
+        resultado_mascaramento.append({
+            "coluna": col,
+            "valores_avaliados": 0,
+            "estrategia": "Sem dados suficientes",
+            "acertos": 0,
+            "erros": 0,
+            "erro_%": pd.NA,
+        })
+        continue
+
+    quantidade_mascarada = max(
+        1, int(round(len(indices_observados) * FRACAO_MASCARAMENTO))
+    )
+    indices_mascarados = (
+        pd.Series(indices_observados)
+        .sample(n=min(quantidade_mascarada, len(indices_observados)),
+                random_state=SEMENTE_MASCARAMENTO)
+        .tolist()
+    )
+
+    valores_reais = dados_teste.loc[indices_mascarados, col].astype("string")
+
+    if col == col_ugr_sigla:
+        valores_estimados = dados_teste.loc[
+            indices_mascarados, col_orgao_sigla
+        ].astype("string")
+        estrategia = "Derivar de orgao.sigla"
+    else:
+        valores_estimados = pd.Series(
+            "Não informado", index=indices_mascarados, dtype="string"
+        )
+        estrategia = 'Preencher com "Não informado"'
+
+    comparacao_teste = (
+        valores_reais.notna()
+        & valores_estimados.notna()
+        & valores_reais.eq(valores_estimados)
+    )
+    acertos = int(comparacao_teste.sum())
+    total_avaliado = len(indices_mascarados)
+    erros = total_avaliado - acertos
+
+    resultado_mascaramento.append({
+        "coluna": col,
+        "valores_avaliados": total_avaliado,
+        "estrategia": estrategia,
+        "acertos": acertos,
+        "erros": erros,
+        "erro_%": round(100 * erros / total_avaliado, 2),
+    })
+
+df_mascaramento = pd.DataFrame(resultado_mascaramento)
+print(
+    f"Teste de mascaramento: {FRACAO_MASCARAMENTO:.0%} dos valores observados "
+    f"(semente aleatória {SEMENTE_MASCARAMENTO})."
+)
+display(df_mascaramento)
+
+print(
+    "Interpretação: a taxa de erro mede a capacidade de reconstruir o valor "
+    "original sob a estratégia escolhida. Nos campos preenchidos com "
+    '"Não informado", o erro de reconstrução de 100% é esperado, pois essa '
+    "estratégia não pretende estimar o valor original. Ela apenas explicita "
+    "a ausência sem inventar um atributo. Já a concordância observada na "
+    "derivação da sigla reforça a hipótese adotada, mas não comprova sua "
+    "validade universal."
+)
+```
+## 6. Quarentena
 
 ```{python}
 # | label: quarentena
-from pathlib import Path
-import pandas as pd
 
-# 1. Cria a pasta de quarentena se não existir
-Path("data/quarentena").mkdir(parents=True, exist_ok=True)
+PASTA_QUARENTENA.mkdir(parents=True, exist_ok=True)
 
-# 2. Garante que as colunas de data estejam no formato adequado
 df["dataInicioAfastamento"] = pd.to_datetime(
-    df["dataInicioAfastamento"], errors="coerce"
+    df["dataInicioAfastamento"],
+    errors="coerce",
 )
 df["dataFimAfastamento"] = pd.to_datetime(
-    df["dataFimAfastamento"], errors="coerce"
+    df["dataFimAfastamento"],
+    errors="coerce",
 )
 
-# 3. Identifica cada tipo de inconsistência
+# Regras de negócio adotadas pela equipe:
+# 1. valorTotalViagem não pode ser negativo;
+# 2. data de fim não pode ser anterior à data de início.
 regra_valor = df["valorTotalViagem"] < 0
 regra_datas = df["dataFimAfastamento"] < df["dataInicioAfastamento"]
 
-# 4. Seleciona cada registro uma única vez, mesmo que viole as duas regras
 mascara_quarentena = regra_valor | regra_datas
 df_quarentena = df.loc[mascara_quarentena].copy()
 
 if not df_quarentena.empty:
-    # Registra todos os motivos aplicáveis ao registro
     motivos = []
+
     for indice in df_quarentena.index:
         motivos_registro = []
 
@@ -347,62 +735,122 @@ if not df_quarentena.empty:
             motivos_registro.append("Valor total da viagem negativo")
 
         if regra_datas.loc[indice]:
-            motivos_registro.append("Data de fim anterior à data de início")
+            motivos_registro.append(
+                "Data de fim anterior à data de início"
+            )
 
         motivos.append("; ".join(motivos_registro))
 
     df_quarentena["motivo_quarentena"] = motivos
 
-    # Salva os registros suspeitos
-    caminho_quar = "data/quarentena/viagens_suspeitas.csv"
-    df_quarentena.to_csv(caminho_quar, index=False, encoding="utf-8")
+    caminho_quar = PASTA_QUARENTENA / "viagens_suspeitas.csv"
+    df_quarentena.to_csv(
+        caminho_quar,
+        index=False,
+        encoding="utf-8",
+    )
 
-    # Remove os registros da base principal
-    df = df.drop(index=df_quarentena.index).reset_index(drop=True)
+    # Mantém os índices originais para que as flags possam ser validadas
+    # contra df_antes_tratamento mesmo depois da separação da quarentena.
+    df = df.drop(index=df_quarentena.index).copy()
 
     print(
-        f"ATENÇÃO: {len(df_quarentena)} registros foram movidos "
+        f"ATENÇÃO: {len(df_quarentena):,} registros foram movidos "
         f"para a quarentena em '{caminho_quar}'."
     )
+
     display(df_quarentena[["id", "motivo_quarentena"]].head())
 else:
     print(
-        "Nenhum registro suspeito detectado. "
-        "Não foram encontrados valores financeiros negativos "
-        "nem datas de fim anteriores às datas de início."
+        "Nenhum registro suspeito detectado pelas regras de valor negativo "
+        "e ordem das datas."
     )
+
+print(f"Registros restantes em trusted: {len(df):,}")
+print(f"Registros em quarentena: {len(df_quarentena):,}")
 ```
 
-## 6. Validação do tratamento de dados ausentes
+A quarentena é usada em vez de uma estratégia **Fail-Stop** porque essas inconsistências impedem que determinados registros sejam tratados como confiáveis, mas não impedem a análise exploratória do restante da base. A decisão é adequada ao contexto desta atividade, que não constitui prestação de contas oficial. Os registros suspeitos permanecem separados para inspeção posterior.
+
+## 7. Validação do tratamento de dados ausentes
 
 ```{python}
 # | label: validacao-tratamento
 
-# As flags permitem confirmar que os registros originalmente ausentes
-# continuam identificáveis após o preenchimento com "Não informado".
 colunas_flags = [
     "descricaoPoder_imputada",
     "cnpj_imputada",
     "sigla_imputada",
     "nome_imputada",
-    "cargo_imputado"
+    "cargo_imputado",
+    "ugr_sigla_derivada",
 ]
 
 for flag in colunas_flags:
-    assert flag in df.columns, f"Erro: Flag {flag} não foi criada."
+    assert flag in df.columns, f"Erro: flag {flag} não foi criada."
 
-# Confirma que nenhum valor marcado como ausente permaneceu nulo
-assert df.loc[df["cargo_imputado"], "cargo.descricao"].isna().sum() == 0
+# A validação considera somente os registros que permaneceram em trusted.
+# Os índices originais foram preservados na separação da quarentena, permitindo
+# comparar cada flag com a linha correspondente antes do tratamento.
+indices_trusted = df.index
 
 for col in colunas_ugr:
-    nome_flag = f"{col.split('.')[-1]}_imputada"
-    assert df.loc[df[nome_flag], col].isna().sum() == 0
+    flag = f"{col.split('.')[-1]}_imputada"
+    if col in df.columns:
+        ausencias_antes_trusted = int(
+            df_antes_tratamento.loc[indices_trusted, col].isna().sum()
+        )
+        ausencias_marcadas_trusted = int(df[flag].sum())
+        assert ausencias_antes_trusted == ausencias_marcadas_trusted, (
+            f"A flag {flag} não preservou as ausências originais dos "
+            "registros mantidos em trusted."
+        )
+        assert df[col].isna().sum() == 0
 
-print("Validação concluída: todos os registros originalmente ausentes foram "
-      "preenchidos com 'Não informado' e permanecem identificáveis pelas flags.")
+ausencias_cargo_trusted = int(
+    df_antes_tratamento.loc[indices_trusted, "cargo.descricao"].isna().sum()
+)
+assert int(df["cargo_imputado"].sum()) == ausencias_cargo_trusted
+assert df["cargo.descricao"].isna().sum() == 0
+assert int(df["ugr_sigla_derivada"].sum()) == int(
+    mascara_derivacao.loc[indices_trusted].sum()
+)
+
+print(
+    "Validação concluída: as flags preservam as ausências originais, "
+    "os valores derivados estão identificados e os campos tratados "
+    "não mantêm valores nulos."
+)
 ```
+### Resultado final
 
+```{python}
+# | label: resumo-final
+
+print("========== RESUMO DO TRATAMENTO ==========")
+print(f"Registros após deduplicação: {total_apos_deduplicacao:,}")
+print(f"Registros trusted: {len(df):,}")
+print(f"Registros em quarentena: {len(df_quarentena):,}")
+print(
+    "Registros com sigla da unidade gestora derivada: "
+    f"{int(df['ugr_sigla_derivada'].sum()):,}"
+)
+print(
+    "Registros com sigla da UGR ainda não informada: "
+    f"{int(df[col_ugr_sigla].eq('Não informado').sum()):,}"
+)
+print(
+    "Ausências originais de cargo sinalizadas: "
+    f"{int(df['cargo_imputado'].sum()):,}"
+)
+```
 
 ## Fechamento
 
-Para distinguir os dados originais dos campos cujo conteúdo estava ausente, o leitor deve observar as colunas indicadoras criadas no tratamento, como cargo_imputado, descricaoPoder_imputada, cnpj_imputada, sigla_imputada e nome_imputada. Quando uma dessas flags apresentar o valor True, significa que o campo correspondente estava ausente na extração bruta do Portal da Transparência e foi preenchido com "Não informado". Não foi utilizada a moda para atribuir um valor que não foi fornecido pela fonte. Quando a flag apresentar False, o valor original foi preservado. A coluna beneficiario.nis foi descartada por apresentar 100% de ausência, sem que fosse possível determinar o mecanismo responsável por essa ausência.
+O tratamento separa informação originalmente registrada, ausência de informação e valor derivado por uma regra observada nos dados. A classificação de `cargo.descricao` como MAR é adotada apenas como hipótese de trabalho, pois a associação observada com `funcao.descricao` não comprova, isoladamente, o mecanismo de ausência. As flags `cargo_imputado`, `descricaoPoder_imputada`, `cnpj_imputada`, `sigla_imputada` e `nome_imputada` preservam a rastreabilidade das ausências originais. A flag `ugr_sigla_derivada` identifica os registros em que a sigla da unidade gestora foi preenchida a partir de `orgao.sigla`.
+
+A comparação entre as siglas apresentou 100% de coincidência nos 46.731 pares completos verificados pela equipe. Os registros sem os dois campos preenchidos foram contabilizados separadamente como não comparáveis, e não como divergências. A aplicação da correspondência às linhas sem sigla da unidade gestora é uma suposição explícita da equipe. Por esse motivo, a derivação fica restrita à sigla; os demais campos ausentes recebem `"Não informado"` e mantêm suas flags. Valores de negócio como `"Sem informação"`, `"Inválido"` e `"Sigilosa"` são preservados como declarações da fonte.
+
+A avaliação por mascaramento simula a perda de uma parcela dos valores observados em cada coluna do bloco e calcula o erro de reconstrução da estratégia adotada. O erro de 100% nos campos preenchidos com `"Não informado"` é esperado, pois essa estratégia não busca reconstruir o valor original, mas registrar explicitamente a ausência. A concordância da derivação da sigla é um resultado da amostra testada e não deve ser interpretada como garantia universal.
+
+`beneficiario.nis` é descartada por estar 100% ausente. A consulta confirma que não há valores observados no campo, portanto não é possível classificar sua ausência como MCAR, MAR ou MNAR com esta base. Por fim, os registros que violam as regras de consistência são separados em quarentena, mantendo o conjunto trusted livre das inconsistências identificadas sem interromper toda a análise.
