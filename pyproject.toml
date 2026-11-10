@@ -8,6 +8,7 @@ dependencies = [
     "pandera>=0.34.0",
     "pyarrow>=25.0.1",
     "python-dotenv>=1.2.3",
+    "quarto-cli>=1.11.9",
     "requests>=2.34.2",
 ]
 
