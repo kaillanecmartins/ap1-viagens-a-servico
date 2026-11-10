@@ -28,7 +28,6 @@ data/quarentena/*
 
 # Excecoes: estrutura de diretorios + amostra usada pelo modo demo
 !data/raw/.gitkeep
-!data/raw/emendas_2023_sample.json
 !data/trusted/.gitkeep
 !data/mart/.gitkeep
 !data/mart/dicionario_dados.json
