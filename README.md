@@ -32,22 +32,23 @@ data/raw/
 
 As configurações da coleta são armazenadas no arquivo `.env`. O projeto utiliza as seguintes variáveis:
 
-| Variável            | Descrição                                              |
-| ------------------- | ------------------------------------------------------ |
-| `API_BASE_URL`      | URL base da API                                        |
-| `API_ENDPOINT`      | Endpoint utilizado na coleta                           |
-| `API_KEY`           | Chave de acesso à API                                  |
-| `ORGAOS_FILE`       | Arquivo com os órgãos selecionados                     |
-| `ORGAOS_CODIGO_COL` | Coluna que contém o código do órgão                    |
-| `ORGAOS_NOME_COL`   | Coluna que contém o nome do órgão                      |
-| `DATA_INICIO`       | Data inicial da coleta                                 |
-| `DATA_FIM`          | Data final da coleta                                   |
-| `MESES_POR_COLETA`  | Quantidade de meses consultados por requisição         |
-| `PAGE_SIZE`         | Quantidade de registros solicitados por página         |
-| `REQUEST_TIMEOUT`   | Tempo limite das requisições                           |
-| `MAX_TENTATIVAS`    | Número máximo de tentativas para erros recuperáveis    |
-| `BACKOFF_BASE`      | Base utilizada para o tempo de espera entre tentativas |
-| `RAW_DIR`           | Diretório onde os dados brutos serão armazenados       |
+| Variável                | Descrição                                                          |
+| ----------------------- | ------------------------------------------------------------------ |
+| `API_BASE_URL`          | URL base da API                                                    |
+| `API_ENDPOINT`          | Endpoint utilizado na coleta                                       |
+| `API_KEY`               | Chave de acesso à API                                              |
+| `ORGAOS_FILE`           | Arquivo com os órgãos selecionados                                 |
+| `ORGAOS_CODIGO_COL`     | Coluna que contém o código do órgão                                |
+| `ORGAOS_NOME_COL`       | Coluna que contém o nome do órgão                                  |
+| `DATA_INICIO`           | Data inicial da coleta                                             |
+| `DATA_FIM`              | Data final da coleta                                               |
+| `MESES_POR_COLETA`      | Quantidade de meses consultados por requisição                     |
+| `PAGE_SIZE`             | Quantidade de registros solicitados por página                     |
+| `REQUEST_TIMEOUT`       | Tempo limite das requisições                                       |
+| `MAX_TENTATIVAS`        | Número máximo de tentativas para erros recuperáveis                |
+| `BACKOFF_BASE`          | Base utilizada para o tempo de espera entre tentativas             |
+| `INTERVALO_REQUISICOES` | Intervalo mínimo entre o início das requisições à API, em segundos |
+| `RAW_DIR`               | Diretório onde os dados brutos serão armazenados                   |
 
 Exemplo de configuração:
 
@@ -68,6 +69,7 @@ PAGE_SIZE=100
 REQUEST_TIMEOUT=30
 MAX_TENTATIVAS=5
 BACKOFF_BASE=2
+INTERVALO_REQUISICOES=0.7
 
 RAW_DIR=data/raw/portal_transparencia
 ```
@@ -76,36 +78,51 @@ O arquivo `.env` contém informações de configuração e credenciais e, por is
 
 ## Execução
 
-Instale as dependências:
+### 1. Obter o projeto
+
+Clone o repositório:
+
+```bash
+git clone <url-do-repositorio>
+```
+
+Acesse a pasta do projeto:
+
+```bash
+cd ap1-viagens-a-servico
+```
+
+### 2. Configurar o ambiente
+
+Crie o arquivo `.env` a partir do modelo disponibilizado:
+
+```bash
+cp .env.example .env
+```
+
+Abra o arquivo `.env` e informe sua chave de acesso à API na variável `API_KEY`.
+
+Instale as dependências do projeto:
 
 ```bash
 uv sync
 ```
 
-Execute a coleta dos dados:
+### 3. Executar a coleta
 
 ```bash
 uv run python src/ingest.py
 ```
 
-Gere o diagnóstico dos dados coletados:
+### 4. Gerar o diagnóstico dos dados
 
 ```bash
-uv run quarto render diagnostico.qmd
+uv run quarto render analises/diagnostico.qmd
 ```
 
-Execute a transformação dos dados:
+### 5. Transformar os dados
 
 ```bash
-uv run python src/transform.py
-```
-
-A sequência completa é:
-
-```bash
-uv sync
-uv run python src/ingest.py
-uv run quarto render diagnostico.qmd
 uv run python src/transform.py
 ```
 
@@ -135,9 +152,9 @@ O `transform.py` grava `data/trusted/viagens.parquet`, com os dados limpos e val
 
 Colunas criadas no tratamento (indicam o que foi preenchido pela equipe, e não medido pela fonte):
 
-| Coluna | Significado |
-| ------ | ----------- |
-| `cargo_imputado` | `cargo.descricao` estava vazio e foi preenchido com "Não informado" |
+| Coluna                                                                        | Significado                                                                   |
+| ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `cargo_imputado`                                                              | `cargo.descricao` estava vazio e foi preenchido com "Não informado"           |
 | `descricaoPoder_imputada`, `cnpj_imputada`, `sigla_imputada`, `nome_imputada` | O bloco `unidadeGestoraResponsavel.*` estava vazio e foi preenchido pela moda |
 
 Para usar só os valores originais da fonte, filtre pelas flags (por exemplo, `cargo_imputado == False`). Para saber a que instituto a viagem pertence, use `orgao.sigla`, que é sempre preenchida.
