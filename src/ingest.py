@@ -1,8 +1,10 @@
+
 import json
 import os
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+
 import pandas as pd
 import requests
 from dotenv import load_dotenv
@@ -33,6 +35,10 @@ REQUEST_TIMEOUT = int(os.environ["REQUEST_TIMEOUT"])
 MAX_TENTATIVAS = int(os.environ["MAX_TENTATIVAS"])
 BACKOFF_BASE = int(os.environ["BACKOFF_BASE"])
 
+INTERVALO_REQUISICOES = float(
+    os.environ.get("INTERVALO_REQUISICOES", "0.7")
+)
+
 RAW_DIR = Path(os.environ["RAW_DIR"])
 
 
@@ -55,6 +61,11 @@ def validar_configuracao():
     if MESES_POR_COLETA != 1:
         raise ValueError(
             "MESES_POR_COLETA deve ser 1 para o endpoint /viagens."
+        )
+
+    if INTERVALO_REQUISICOES <= 0:
+        raise ValueError(
+            "INTERVALO_REQUISICOES deve ser maior que zero."
         )
 
 
@@ -146,6 +157,28 @@ def gerar_periodos():
     return periodos
 
 
+# Controla o intervalo entre as requisições.
+ultima_requisicao = None
+
+
+def aguardar_intervalo():
+    global ultima_requisicao
+
+    agora = time.monotonic()
+
+    if ultima_requisicao is not None:
+        tempo_decorrido = agora - ultima_requisicao
+
+        tempo_restante = (
+            INTERVALO_REQUISICOES - tempo_decorrido
+        )
+
+        if tempo_restante > 0:
+            time.sleep(tempo_restante)
+
+    ultima_requisicao = time.monotonic()
+
+
 def requisitar(params):
     url = f"{API_BASE_URL}{API_ENDPOINT}"
 
@@ -154,6 +187,9 @@ def requisitar(params):
     }
 
     for tentativa in range(MAX_TENTATIVAS):
+        # Aguarda antes de cada tentativa de requisição.
+        aguardar_intervalo()
+
         try:
             resposta = requests.get(
                 url,
@@ -170,6 +206,11 @@ def requisitar(params):
                     f"Falha de rede após "
                     f"{MAX_TENTATIVAS} tentativas: {erro}"
                 ) from erro
+
+            print(
+                f"Falha de rede. "
+                f"Aguardando {espera}s antes de tentar novamente."
+            )
 
             time.sleep(espera)
             continue
@@ -191,11 +232,23 @@ def requisitar(params):
                 )
             )
 
+            print(
+                f"Limite de requisições atingido. "
+                f"Aguardando {espera}s."
+            )
+
             time.sleep(espera)
             continue
 
         if resposta.status_code >= 500:
             espera = BACKOFF_BASE ** tentativa
+
+            print(
+                f"Erro no servidor ({resposta.status_code}). "
+                f"Tentativa {tentativa + 1}/"
+                f"{MAX_TENTATIVAS}. "
+                f"Aguardando {espera}s."
+            )
 
             time.sleep(espera)
             continue
