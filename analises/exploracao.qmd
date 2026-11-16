@@ -1,7 +1,7 @@
 ---
 title: "Exploração do dado — viagens a serviço"
-subtitle: "Institutos Federais do Nordeste · ICD · Etapa 2"
-author: "Equipe do projeto"
+subtitle: "Institutos Federais do Nordeste - Introdução a Ciência de Dados - Etapa 2"
+author: "Franciele Alves da Silva - 20231SI0012, Kaillane Corrêa Martins - 20211SI0023, Samuel Chaves de Sá - 20231SI0011"
 date: today
 version: "1.1.1 — adaptação do esqueleto de Exploração"
 lang: pt-BR
@@ -95,8 +95,6 @@ display(con.sql("""
 ```
 
 # Bloco 1: perguntas e expectativas
-
-As expectativas abaixo foram formuladas **antes** de executar as consultas exploratórias. Não devem ser modificadas em função dos gráficos.
 
 | # | Pergunta analítica | Colunas | Expectativa, escrita antes de olhar |
 |:--|:------------------|:--------|:-------------------------------------|
