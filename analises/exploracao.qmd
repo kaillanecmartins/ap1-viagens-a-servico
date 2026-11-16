@@ -55,7 +55,7 @@ con.execute(f"""
 """)
 
 con.execute("""
-    CREATE VIEW base AS
+    CREATE OR REPLACE VIEW base AS
     SELECT
         *,
         YEAR(dataInicioAfastamento) AS ano_inicio,
@@ -188,12 +188,9 @@ px.histogram(custos, x='log10_custo_mais_1', nbins=60,
              title='Log10(custo + 1), incluindo custo zero').show()
 ```
 
+Os histogramas indicam concentração de registros em valores financeiros menores, com valores elevados mais dispersos. Essa distribuição sugere assimetria e possível influência de valores extremos nas médias.
 
-As variáveis financeiras apresentam distribuições assimétricas, com concentração em valores menores e presença de custos elevados. A diferença entre médias e medianas sugere influência de valores extremos.
-
-Os histogramas com 30 e 60 faixas permitem observar a distribuição em diferentes níveis de detalhe, enquanto a escala logarítmica facilita a visualização dos custos, incluindo registros com valor zero.
-
-
+A comparação entre 30 e 60 faixas permite observar as concentrações em diferentes níveis de detalhe. A escala logarítmica facilita a visualização dos custos, incluindo os registros com valor zero.
 
 # Bloco 3: P1, do segundo passo ao quarto
 
@@ -261,7 +258,6 @@ display(p1_tipos)
 # | label: p1-cruzada
 p1_tabela = p1_tipos.pivot(index='instituto', columns='tipo', values='custo_medio')
 display(p1_tabela)
-# Consulte também p1_tipos para considerar o tamanho de cada grupo.
 ```
 
 
@@ -327,7 +323,7 @@ px.line(p2_if, x='mes', y='custo_medio', color='instituto', markers=True,
 ```{python}
 # | label: p2-cruzada
 display(p2_if.pivot(index='instituto', columns='mes', values='custo_medio'))
-# Para evitar interpretar médias com poucas viagens, confira também:
+
 display(p2_if.pivot(index='instituto', columns='mes', values='viagens'))
 ```
 
@@ -412,7 +408,8 @@ display(p3_faixas.pivot(index='tipo', columns='faixa_duracao', values='custo_med
 ```
 
 
-Os custos aumentaram, em geral, conforme a duração das viagens. Nas viagens nacionais, a mediana passou de R$ 137,59 (um dia) para R$ 1.528,20 (quatro a sete dias). A expectativa foi sustentada pelas comparações descritivas, embora destino, distância e transporte ainda possam influenciar os valores.
+Os custos aumentaram, em geral, conforme a duração das viagens. Nas viagens nacionais, a mediana passou de R$ 137,59 (um dia) para R$ 1.528,20 (quatro a sete dias). A expectativa foi sustentada pelas comparações descritivas, embora destino, distância e transporte ainda possam influenciar os valores. 
+A comparação gráfica por tipo considerou apenas grupos com pelo menos 20 registros, limitando a análise das viagens internacionais, que são menos frequentes.
 
 
 # Bloco 6: a quarentena relida
@@ -436,32 +433,32 @@ con.execute(f"""
     WHERE YEAR(dataInicioAfastamento) = 2024
 """)
 
-con.sql("""
+display(con.sql("""
     SELECT
         COUNT(*) AS rejeitados_2024,
         COUNT(DISTINCT motivo) AS motivos_distintos
     FROM quarentena
-""").df()
+""").df())
 
 ```
 
 ```{python}
 # | label: quarentena-motivos
-con.sql("""
+display(con.sql("""
     SELECT motivo, COUNT(*) AS quantidade
     FROM quarentena GROUP BY 1 ORDER BY quantidade DESC
-""").df()
+""").df())
 ```
 
 ```{python}
 # | label: quarentena-cruzada
-con.sql("""
+display(con.sql("""
     SELECT "orgao.sigla" AS instituto,
            MONTH(dataInicioAfastamento) AS mes,
            motivo, COUNT(*) AS registros,
            ROUND(SUM(valorTotalViagem), 2) AS valor_total
     FROM quarentena GROUP BY 1, 2, 3 ORDER BY registros DESC
-""").df()
+""").df())
 ```
 
 
@@ -477,7 +474,7 @@ A tabela reúne os padrões identificados na exploração de 2024, as explicaç�
 |---|---|---|---|---|---|
 | P1 | Custos diferentes entre IFs. | IFBA: R$ 1.684,89; IFS: R$ 530,13. Sustentada. | A presença de viagens internacionais não explica isoladamente as diferenças de custo. | Duração, destino e valores extremos. | Em 2025, pelo menos dois dos três IFs com maior custo médio em 2024 permanecerão entre os três primeiros. |
 | P2 | Variação mensal de custos e volume. | Novembro: 4.158 viagens; junho: maior média, R$ 1.278,73. Sustentada. | O número de dias do mês não explica isoladamente a concentração de viagens. | Calendário acadêmico e orçamento. | Novembro também apresentará o maior volume de viagens em 2025. |
-| P3 | Maior duração, maior custo. | Mediana nacional: R$ 137,59 (1 dia) e R$ 1.528,20 (4–7 dias). Sustentada. | A diferença entre viagens nacionais e internacionais não explica isoladamente a associação observada. | Destino, distância e transporte. | Em 2025, viagens nacionais de 4–7 dias continuarão com mediana superior às de 1 dia. |
+| P3 | Maior duração, maior custo. | Mediana nacional: R$ 137,59 (1 dia) e R$ 1.528,20 (4–7 dias). Sustentada. | A associação também aparece nas viagens nacionais, não dependendo apenas da diferença entre tipos. | Destino, distância e transporte. | Em 2025, viagens nacionais de 4–7 dias continuarão com mediana superior às de 1 dia. |
 
 
 # Bloco 8: perguntas para depois
