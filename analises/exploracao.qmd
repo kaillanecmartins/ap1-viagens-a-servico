@@ -1,0 +1,491 @@
+---
+title: "Exploração do dado — viagens a serviço"
+subtitle: "Institutos Federais do Nordeste · ICD · Etapa 2"
+author: "Equipe do projeto"
+date: today
+version: "1.1.1 — adaptação do esqueleto de Exploração"
+lang: pt-BR
+format:
+  html:
+    toc: true
+    code-fold: false
+    embed-resources: true
+execute:
+  echo: true
+  warning: false
+---
+
+# Preparação: o recorte da exploração
+
+A unidade observacional é um registro de viagem (`id`). A camada trusted contém 47.357 registros no total de 2024 e 2025. **Somente viagens iniciadas em 2024** entram na exploração. O ano de 2025 é a parte guardada, destinada à confirmação das previsões na Etapa 3. A delimitação por data de início é explícita: algumas viagens iniciadas em 2024 podem terminar no ano seguinte. Todas as consultas abaixo devem usar `base`, `viagens` ou views derivadas, e nunca o arquivo completo diretamente.
+
+```{python}
+# | label: setup
+
+from pathlib import Path
+
+import duckdb
+import numpy as np
+import pandas as pd
+import plotly.express as px
+
+RAIZ = Path.cwd()
+
+if not (RAIZ / "data" / "trusted" / "viagens.parquet").exists():
+    RAIZ = RAIZ.parent
+
+TRUSTED = RAIZ / "data" / "trusted" / "viagens.parquet"
+QUARENTENA = RAIZ / "data" / "quarentena" / "rejeitados.parquet"
+
+if not TRUSTED.is_file():
+    raise FileNotFoundError(
+        f"Arquivo da camada trusted não encontrado: {TRUSTED}"
+    )
+
+ANOS_EXPLORACAO = (2024,)
+con = duckdb.connect()
+
+caminho_trusted = TRUSTED.as_posix().replace("'", "''")
+
+con.execute(f"""
+    CREATE OR REPLACE VIEW viagens AS
+    SELECT *
+    FROM read_parquet('{caminho_trusted}')
+    WHERE YEAR(dataInicioAfastamento) = 2024
+""")
+
+con.execute("""
+    CREATE VIEW base AS
+    SELECT
+        *,
+        YEAR(dataInicioAfastamento) AS ano_inicio,
+        MONTH(dataInicioAfastamento) AS mes_inicio,
+        DATE_DIFF(
+            'day',
+            dataInicioAfastamento,
+            dataFimAfastamento
+        ) + 1 AS duracao_dias
+    FROM viagens
+""")
+
+anos_vistos = sorted(
+    ano for (ano,) in con.sql("""
+        SELECT DISTINCT ano_inicio
+        FROM base
+    """).fetchall()
+)
+
+assert anos_vistos == list(ANOS_EXPLORACAO), (
+    f"Recorte inesperado: {anos_vistos}"
+)
+
+print("Arquivo trusted:", TRUSTED)
+print("Anos explorados:", anos_vistos)
+
+display(con.sql("""
+    SELECT
+        COUNT(*) AS quantidade_viagens,
+        COUNT(DISTINCT id) AS ids_distintos,
+        COUNT(DISTINCT "orgao.sigla") AS institutos,
+        MIN(dataInicioAfastamento) AS primeira_viagem,
+        MAX(dataInicioAfastamento) AS ultima_viagem
+    FROM base
+""").df())
+
+```
+
+# Bloco 1: perguntas e expectativas
+
+As expectativas abaixo foram formuladas **antes** de executar as consultas exploratórias. Não devem ser modificadas em função dos gráficos.
+
+| # | Pergunta analítica | Colunas | Expectativa, escrita antes de olhar |
+|:--|:------------------|:--------|:-------------------------------------|
+| P1 | O custo médio das viagens difere entre os Institutos Federais? | `orgao.sigla`, `valorTotalViagem`, `tipoViagem` | Há diferenças de custos entre institutos; uma parte pode ser explicada pela composição dos tipos de viagem. |
+| P2 | Como a quantidade de viagens e o custo médio variam entre os meses? | `dataInicioAfastamento`, `valorTotalViagem`, `orgao.sigla` | Há meses de maior atividade e diferenças de custo; parte da diferença em contagens pode vir do número de dias de cada mês. |
+| P3 | A duração das viagens está associada ao custo total? | `duracao_dias`, `valorTotalViagem`, `tipoViagem` | Viagens mais longas tendem a ter custo maior; o padrão pode mudar conforme o tipo da viagem. |
+
+# Bloco 2: primeiro passo, cada coluna sozinha
+
+## Marcas deixadas pelo tratamento
+
+A trusted traz cinco flags de imputação. Elas representam informação preenchida pela transformação, não novos fatos observados na fonte. `orgao.sigla`, empregado na P1 e P2, não é a sigla imputada da unidade gestora.
+
+```{python}
+# | label: marcas
+con.sql("""
+    SELECT COUNT(*) AS viagens,
+           COUNT(*) FILTER (WHERE cargo_imputado) AS cargo_imputado,
+           COUNT(*) FILTER (WHERE descricaoPoder_imputada) AS poder_imputado,
+           COUNT(*) FILTER (WHERE cnpj_imputada) AS cnpj_imputado,
+           COUNT(*) FILTER (WHERE sigla_imputada) AS sigla_imputada,
+           COUNT(*) FILTER (WHERE nome_imputada) AS nome_imputado
+    FROM base
+""").df()
+```
+
+
+Foram analisadas 22.419 viagens de 2024, distribuídas entre 11 Institutos Federais. Dessas, 1.310 (5,84%) tiveram o cargo imputado e 320 (1,43%) receberam preenchimento em campos da unidade gestora. Essas alterações não afetam diretamente as variáveis utilizadas nas três perguntas analíticas.
+
+## Barras de cada coluna categórica
+
+```{python}
+# | label: barras
+categoricas = [
+    'orgao.sigla',
+    'tipoViagem',
+    'situacao',
+    'viagem.urgenciaViagem',
+]
+for coluna in categoricas:
+    valores = con.sql(f'SELECT "{coluna}" AS categoria FROM base').df()
+    px.histogram(valores, y='categoria', title=coluna).update_yaxes(
+        categoryorder='total ascending'
+    ).show()
+    display(con.sql(f'''
+        SELECT "{coluna}" AS categoria, COUNT(*) AS quantidade
+        FROM base GROUP BY 1 ORDER BY quantidade ASC LIMIT 5
+    ''').df())
+```
+
+
+O IFAL apresentou mais viagens (3.245) e o IFBA, menos (789). Predominaram viagens nacionais (99,72%) e realizadas (99,66%). Quanto à urgência, 84,58% foram classificadas como "Sim". Grupos pequenos, como as 62 viagens internacionais, exigem cautela nas comparações.
+
+## Forma das colunas numéricas
+
+```{python}
+# | label: forma-poucos-valores
+display(con.sql("""
+    SELECT
+        MIN(duracao_dias) AS duracao_minima,
+        MAX(duracao_dias) AS duracao_maxima,
+        MEDIAN(duracao_dias) AS duracao_mediana,
+        COUNT(*) FILTER (WHERE valorTotalViagem = 0) AS custo_zero,
+        COUNT(*) FILTER (WHERE valorTotalDiarias = 0) AS diarias_zero,
+        COUNT(*) FILTER (WHERE valorTotalPassagem = 0) AS passagem_zero
+    FROM base
+""").df())
+
+px.histogram(con.sql('SELECT duracao_dias FROM base').df(),
+             x='duracao_dias', nbins=30, title='Duração das viagens').show()
+```
+
+```{python}
+# | label: forma-valor
+numericas = [
+    'valorTotalViagem', 'valorTotalDiarias', 'valorTotalPassagem',
+    'valorTotalDevolucao', 'valorTotalRestituicao',
+    'valorTotalTaxaAgenciamento', 'valorMulta'
+]
+for coluna in numericas:
+    valores = con.sql(f'SELECT "{coluna}" AS valor FROM base').df()
+    for faixas in (30, 60):
+        px.histogram(valores, x='valor', nbins=faixas,
+                     title=f'{coluna} — {faixas} faixas').show()
+
+custos = con.sql('SELECT valorTotalViagem FROM base').df()
+custos['log10_custo_mais_1'] = np.log10(custos['valorTotalViagem'] + 1)
+px.histogram(custos, x='log10_custo_mais_1', nbins=60,
+             title='Log10(custo + 1), incluindo custo zero').show()
+```
+
+
+As variáveis financeiras apresentam distribuições assimétricas, com concentração em valores menores e presença de custos elevados. A diferença entre médias e medianas sugere influência de valores extremos.
+
+Os histogramas com 30 e 60 faixas permitem observar a distribuição em diferentes níveis de detalhe, enquanto a escala logarítmica facilita a visualização dos custos, incluindo registros com valor zero.
+
+
+
+# Bloco 3: P1, do segundo passo ao quarto
+
+## Duas colunas
+
+```{python}
+# | label: p1-custo
+p1 = con.sql("""
+    SELECT "orgao.sigla" AS instituto,
+           COUNT(*) AS viagens,
+           ROUND(AVG(valorTotalViagem), 2) AS custo_medio,
+           ROUND(MEDIAN(valorTotalViagem), 2) AS custo_mediano,
+           ROUND(SUM(valorTotalViagem), 2) AS gasto_total
+    FROM base GROUP BY 1 ORDER BY custo_medio DESC
+""").df()
+display(p1)
+px.bar(p1, x='instituto', y='custo_medio', hover_data=['viagens','custo_mediano'],
+       title='Custo médio por instituto, 2024').show()
+```
+
+```{python}
+# | label: p1-boxplot
+p1_individual = con.sql("""
+    SELECT "orgao.sigla" AS instituto, valorTotalViagem AS custo
+    FROM base WHERE valorTotalViagem > 0
+""").df()
+px.box(p1_individual, x='instituto', y='custo', log_y=True,
+       title='Dispersão dos custos positivos por instituto').show()
+```
+
+Apenas o boxplot logarítmico exclui custos zero; as estatísticas da tabela incluem esses registros.
+
+## Rivais de duas colunas: mistura de tipos e extremos
+
+
+As diferenças de custo médio podem estar relacionadas à presença de viagens com valores extremos ou à proporção de viagens nacionais e internacionais em cada instituto. Para investigar essas possibilidades, serão comparadas médias, medianas e distribuições por tipo de viagem.
+
+
+```{python}
+# | label: p1-mistura
+mistura = con.sql("""
+    SELECT "orgao.sigla" AS instituto, tipoViagem AS tipo FROM base
+""").df()
+px.histogram(mistura, y='instituto', color='tipo', barnorm='percent',
+             title='Composição percentual de tipos de viagem por IF').show()
+```
+
+## Uma terceira coluna
+
+```{python}
+# | label: p1-terceira
+p1_tipos = con.sql("""
+    SELECT "orgao.sigla" AS instituto, tipoViagem AS tipo,
+           COUNT(*) AS viagens,
+           ROUND(AVG(valorTotalViagem), 2) AS custo_medio,
+           ROUND(MEDIAN(valorTotalViagem), 2) AS custo_mediano
+    FROM base GROUP BY 1, 2 ORDER BY 1, 2
+""").df()
+display(p1_tipos)
+```
+
+## A tabela cruzada
+
+```{python}
+# | label: p1-cruzada
+p1_tabela = p1_tipos.pivot(index='instituto', columns='tipo', values='custo_medio')
+display(p1_tabela)
+# Consulte também p1_tipos para considerar o tamanho de cada grupo.
+```
+
+
+O IFBA apresentou o maior custo médio (R$ 1.684,89) e o IFS, o menor (R$ 530,13), diferença de R$ 1.154,76. O IFBA manteve custo elevado nas viagens nacionais (R$ 1.681,96), indicando que as viagens internacionais não explicam isoladamente essa diferença. A expectativa foi sustentada, mas duração, destino e valores extremos permanecem como possíveis explicações.
+
+
+# Bloco 4: P2, do segundo passo ao quarto
+
+## Duas colunas
+
+```{python}
+# | label: p2-mensal
+p2 = con.sql("""
+    SELECT mes_inicio AS mes,
+           COUNT(*) AS viagens,
+           ROUND(AVG(valorTotalViagem), 2) AS custo_medio,
+           ROUND(MEDIAN(valorTotalViagem), 2) AS custo_mediano,
+           ROUND(SUM(valorTotalViagem), 2) AS gasto_total
+    FROM base GROUP BY mes_inicio ORDER BY mes
+""").df()
+display(p2)
+px.line(p2, x='mes', y='custo_medio', markers=True,
+        title='Custo médio por mês (2024)').show()
+px.bar(p2, x='mes', y='viagens',
+       title='Quantidade de viagens por mês (2024)').show()
+```
+
+## Rival: tamanho do mês
+
+```{python}
+# | label: p2-calendario
+calendario = con.sql("""
+    SELECT mes_inicio AS mes,
+           COUNT(*) AS viagens,
+           DAY(LAST_DAY(MAKE_DATE(2024, mes_inicio, 1))) AS dias_do_mes,
+           ROUND(COUNT(*) * 1.0 /
+                 DAY(LAST_DAY(MAKE_DATE(2024, mes_inicio, 1))), 2)
+                 AS viagens_por_dia
+    FROM base GROUP BY 1 ORDER BY mes
+""").df()
+display(calendario)
+px.line(calendario, x='mes', y='viagens_por_dia', markers=True,
+        title='Viagens por dia do calendário, 2024').show()
+```
+
+## Uma terceira coluna
+
+```{python}
+# | label: p2-terceira
+p2_if = con.sql("""
+    SELECT mes_inicio AS mes, "orgao.sigla" AS instituto,
+           COUNT(*) AS viagens,
+           ROUND(AVG(valorTotalViagem), 2) AS custo_medio
+    FROM base GROUP BY 1, 2 ORDER BY 1, 2
+""").df()
+display(p2_if)
+px.line(p2_if, x='mes', y='custo_medio', color='instituto', markers=True,
+        title='Custo médio mensal por instituto').show()
+```
+
+## A tabela cruzada
+
+```{python}
+# | label: p2-cruzada
+display(p2_if.pivot(index='instituto', columns='mes', values='custo_medio'))
+# Para evitar interpretar médias com poucas viagens, confira também:
+display(p2_if.pivot(index='instituto', columns='mes', values='viagens'))
+```
+
+
+Novembro concentrou mais viagens (4.158) e o maior gasto total (R$ 4.731.025,83), enquanto junho apresentou o maior custo médio (R$ 1.278,73). Janeiro teve os menores valores de quantidade (423) e custo médio (R$ 470,05). A diferença de volume permaneceu após considerar os dias de cada mês, sustentando a expectativa de variação mensal, mas sem comprovar sazonalidade.
+
+
+# Bloco 5: P3, do segundo passo ao quarto
+
+## Duas colunas
+
+```{python}
+# | label: p3-dispersao
+display(con.sql("""
+    SELECT
+        MIN(duracao_dias) AS menor_duracao,
+        MAX(duracao_dias) AS maior_duracao,
+        ROUND(AVG(duracao_dias), 2) AS duracao_media,
+        ROUND(CORR(duracao_dias, valorTotalViagem), 3)
+            AS correlacao_pearson
+    FROM base
+""").df())
+
+p3_pontos = con.sql("""
+    SELECT duracao_dias, valorTotalViagem AS custo,
+           tipoViagem AS tipo FROM base
+""").df()
+px.scatter(p3_pontos, x='duracao_dias', y='custo', opacity=0.25,
+           title='Duração e custo, 2024').show()
+```
+
+```{python}
+# | label: p3-por-duracao
+p3_dur = con.sql("""
+    SELECT duracao_dias, COUNT(*) AS viagens,
+           ROUND(AVG(valorTotalViagem), 2) AS custo_medio,
+           ROUND(MEDIAN(valorTotalViagem), 2) AS custo_mediano
+    FROM base GROUP BY 1 HAVING COUNT(*) >= 20 ORDER BY 1
+""").df()
+display(p3_dur)
+px.line(p3_dur, x='duracao_dias', y='custo_mediano', markers=True,
+        title='Custo mediano por duração (grupos com pelo menos 20 viagens)').show()
+```
+
+## Uma terceira coluna
+
+```{python}
+# | label: p3-terceira
+p3_tipo = con.sql("""
+    SELECT tipoViagem AS tipo, duracao_dias,
+           COUNT(*) AS viagens,
+           ROUND(AVG(valorTotalViagem), 2) AS custo_medio
+    FROM base GROUP BY 1, 2
+    HAVING COUNT(*) >= 20 ORDER BY 1, 2
+""").df()
+display(p3_tipo)
+px.line(p3_tipo, x='duracao_dias', y='custo_medio', color='tipo', markers=True,
+        title='Custo médio por duração dentro de cada tipo').show()
+```
+
+## A tabela cruzada
+
+```{python}
+# | label: p3-cruzada
+p3_faixas = con.sql("""
+    WITH f AS (
+        SELECT tipoViagem AS tipo, valorTotalViagem,
+               CASE WHEN duracao_dias = 1 THEN '1 dia'
+                    WHEN duracao_dias BETWEEN 2 AND 3 THEN '2 a 3 dias'
+                    WHEN duracao_dias BETWEEN 4 AND 7 THEN '4 a 7 dias'
+                    ELSE '8 dias ou mais' END AS faixa_duracao
+        FROM base
+    )
+    SELECT tipo, faixa_duracao,
+           COUNT(*) AS viagens,
+           ROUND(AVG(valorTotalViagem), 2) AS custo_medio,
+           ROUND(MEDIAN(valorTotalViagem), 2) AS custo_mediano
+    FROM f GROUP BY 1, 2 ORDER BY 1, 2
+""").df()
+display(p3_faixas)
+display(p3_faixas.pivot(index='tipo', columns='faixa_duracao', values='custo_mediano'))
+```
+
+
+Os custos aumentaram, em geral, conforme a duração das viagens. Nas viagens nacionais, a mediana passou de R$ 137,59 (um dia) para R$ 1.528,20 (quatro a sete dias). A expectativa foi sustentada pelas comparações descritivas, embora destino, distância e transporte ainda possam influenciar os valores.
+
+
+# Bloco 6: a quarentena relida
+
+A quarentena contém dois registros rejeitados pelo contrato de qualidade. Ambos pertencem ao período exploratório de 2024 e serão analisados separadamente, sem reinseri-los na camada trusted.
+
+```{python}
+# | label: quarentena-preparacao
+
+if not QUARENTENA.is_file():
+    raise FileNotFoundError(
+        f"Arquivo da quarentena não encontrado: {QUARENTENA}"
+    )
+
+caminho_quarentena = QUARENTENA.as_posix().replace("'", "''")
+
+con.execute(f"""
+    CREATE OR REPLACE VIEW quarentena AS
+    SELECT *
+    FROM read_parquet('{caminho_quarentena}')
+    WHERE YEAR(dataInicioAfastamento) = 2024
+""")
+
+con.sql("""
+    SELECT
+        COUNT(*) AS rejeitados_2024,
+        COUNT(DISTINCT motivo) AS motivos_distintos
+    FROM quarentena
+""").df()
+
+```
+
+```{python}
+# | label: quarentena-motivos
+con.sql("""
+    SELECT motivo, COUNT(*) AS quantidade
+    FROM quarentena GROUP BY 1 ORDER BY quantidade DESC
+""").df()
+```
+
+```{python}
+# | label: quarentena-cruzada
+con.sql("""
+    SELECT "orgao.sigla" AS instituto,
+           MONTH(dataInicioAfastamento) AS mes,
+           motivo, COUNT(*) AS registros,
+           ROUND(SUM(valorTotalViagem), 2) AS valor_total
+    FROM quarentena GROUP BY 1, 2, 3 ORDER BY registros DESC
+""").df()
+```
+
+
+Os dois registros rejeitados pertencem ao IFAL, em março e novembro de 2024, pelo motivo `devolucao_maior_que_viagem`. Ambos apresentam custo total de R$ 0,00. Sua exclusão não altera o gasto total, mas afeta minimamente a quantidade utilizada no cálculo da média. A origem dessas devoluções permanece sem explicação.
+
+
+# Bloco 7: a tabela de hipóteses a confirmar
+
+A tabela reúne os padrões identificados na exploração de 2024, as explicações alternativas consideradas e as previsões que serão verificadas com os dados reservados de 2025.
+
+
+| # | Expectativa | Padrão, com o número, e veredito | Rivais eliminadas | Rivais pendentes | Decisão e previsão que a confirma |
+|---|---|---|---|---|---|
+| P1 | Custos diferentes entre IFs. | IFBA: R$ 1.684,89; IFS: R$ 530,13. Sustentada. | A presença de viagens internacionais não explica isoladamente as diferenças de custo. | Duração, destino e valores extremos. | Em 2025, pelo menos dois dos três IFs com maior custo médio em 2024 permanecerão entre os três primeiros. |
+| P2 | Variação mensal de custos e volume. | Novembro: 4.158 viagens; junho: maior média, R$ 1.278,73. Sustentada. | O número de dias do mês não explica isoladamente a concentração de viagens. | Calendário acadêmico e orçamento. | Novembro também apresentará o maior volume de viagens em 2025. |
+| P3 | Maior duração, maior custo. | Mediana nacional: R$ 137,59 (1 dia) e R$ 1.528,20 (4–7 dias). Sustentada. | A diferença entre viagens nacionais e internacionais não explica isoladamente a associação observada. | Destino, distância e transporte. | Em 2025, viagens nacionais de 4–7 dias continuarão com mediana superior às de 1 dia. |
+
+
+# Bloco 8: perguntas para depois
+
+A exploração levantou questões adicionais que poderão orientar investigações futuras:
+
+- A classificação de urgência está associada a custos mais elevados?
+- Em quais situações o órgão solicitante difere do órgão pagador?
+- Como explicar devoluções financeiras em viagens com custo total igual a zero?
+
+Essas perguntas não foram investigadas nesta etapa, pois estão fora das três perguntas analíticas selecionadas.
