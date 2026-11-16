@@ -14,6 +14,7 @@ __pycache__/
 # Dados gerados pelo pipeline (podem ser grandes)
 data/raw/*
 data/trusted/*
+data/processed/*
 data/mart/*
 data/feat/*
 data/staging/*
@@ -48,3 +49,6 @@ _quarto/
 *_files/
 # Relatorio renderizado: embed-resources gera ~16 MB, nao versionar
 reports/*.html
+
+# Relatórios HTML gerados pelo Quarto
+analises/*.html
