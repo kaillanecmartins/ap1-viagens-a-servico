@@ -1,0 +1,234 @@
+---
+title: "Desenho do modelo estrela"
+subtitle: "Viagens a serviço dos Institutos Federais do Nordeste"
+author:
+  - "Franciele Alves da Silva — 20231SI0012"
+  - "Kaillane Corrêa Martins — 20211SI0023"
+  - "Samuel Chaves de Sá — 20231SI0011"
+date: today
+lang: pt-BR
+format:
+  html:
+    toc: true
+    number-sections: true
+    theme: cosmo
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+# Processo de negócio
+
+O processo de negócio analisado é a **realização de viagens a serviço por servidores dos Institutos Federais do Nordeste**. Cada registro representa uma viagem cadastrada no Portal da Transparência, com informações sobre período de afastamento, órgão solicitante, tipo, situação, urgência e valores associados.
+
+O modelo considera os registros disponíveis na camada `trusted`, abrangendo 2024 e 2025. O recorte de 2024 utilizado na exploração não deve ser aplicado à construção do modelo, pois os registros de 2025 também precisam estar contemplados para permitir a verificação posterior das hipóteses.
+
+# Granularidade
+
+A fato principal terá **uma linha por viagem cadastrada**, identificada pelo atributo `id` da origem. Portanto, cada linha representa uma ocorrência individual de viagem, e não um processo administrativo ou um conjunto de viagens.
+
+Essa granularidade foi escolhida porque as perguntas da exploração analisam a quantidade, o custo e a duração das viagens. Uma granularidade por PCDP, por exemplo, poderia reunir mais de uma viagem em um mesmo registro, impedindo a análise individual de seus custos e períodos de afastamento.
+
+Manter a viagem como unidade permite comparar custos entre institutos, acompanhar variações mensais, calcular a duração média e estudar a relação entre duração e custo. Também permite realizar agregações posteriores sem perder, na fato principal, a identificação dos registros individuais.
+
+# Dimensões
+
+As dimensões fornecem os atributos descritivos utilizados para filtrar e agrupar as viagens. Todas representam características aplicáveis à granularidade definida: uma viagem.
+
+| Dimensão | Chave | Atributos para análise | Uso nas perguntas |
+|---|---|---|---|
+| `dim_data` | `data` (chave natural) | `ano`, `mes`, `dia` | Comparar quantidade e custo das viagens ao longo dos meses e anos. |
+| `dim_instituto` | `instituto_sk` (chave substituta) | `sigla`, `nome` | Comparar os custos e a quantidade de viagens entre os Institutos Federais. |
+| `dim_classificacao_viagem` | `classificacao_sk` (chave substituta) | `tipo_viagem`, `situacao`, `urgencia_viagem` | Segmentar as viagens por tipo, situação e urgência. |
+
+## Dimensão de data
+
+A dimensão `dim_data` utilizará a própria data como chave primária, contemplando todos os dias do período abrangido pela camada `trusted`, inclusive aqueles sem registros de viagens. Essa cobertura contínua permite análises temporais sem lacunas no calendário e evita que datas sem movimentação desapareçam de consultas e visualizações.
+
+A dimensão será relacionada à fato por meio das datas de início e de fim do afastamento. Assim, a mesma dimensão desempenhará dois papéis distintos na fato: `data_inicio` e `data_fim`. A data utilizada como referência principal nas análises mensais é `dataInicioAfastamento`, conforme adotado na exploração.
+
+## Dimensão de instituto
+
+A dimensão `dim_instituto` utilizará a chave substituta `instituto_sk` para identificar cada instituição, mantendo seus atributos descritivos separados dos registros da fato.
+
+A identificação será baseada nos atributos do órgão (`orgao.sigla` e `orgao.nome`), e não nos atributos da unidade gestora. Essa escolha considera que a exploração identificou valores ausentes ou imputados nos campos referentes à unidade gestora. Dessa forma, a dimensão representa o instituto ao qual a viagem está associada, sem depender desses campos com problemas de preenchimento.
+
+## Dimensão de classificação da viagem
+
+A dimensão `dim_classificacao_viagem` reúne os atributos `tipo_viagem`, `situacao` e `urgencia_viagem`, que descrevem a classificação da própria viagem. Essa composição mantém atributos do mesmo contexto de análise em uma única dimensão, evitando a criação de dimensões separadas com poucos atributos descritivos.
+
+Cada combinação desses atributos deverá ser identificada de forma única por meio da chave substituta `classificacao_sk`. Mesmo que algumas categorias sejam predominantes na exploração de 2024, os valores devem ser preservados para permitir segmentações e análises do período completo, incluindo 2025.
+
+# Medidas
+
+As medidas numéricas previstas para a fato principal são:
+
+| Medida | Coluna de origem | Classe | Observação |
+|---|---|---|---|
+| Duração | `duracao_dias` | Aditiva | A soma representa o total de dias das viagens consideradas. |
+| Valor total da viagem | `valorTotalViagem` | Aditiva | Pode ser somado para obter o custo total do conjunto de viagens. |
+| Valor das diárias | `valorTotalDiarias` | Aditiva | Pode ser somado para obter o total pago em diárias. |
+| Valor das passagens | `valorTotalPassagem` | Aditiva | Pode ser somado para obter o total gasto com passagens. |
+| Valor das devoluções | `valorTotalDevolucao` | Aditiva | Pode ser somado para obter o total devolvido. |
+| Valor das restituições | `valorTotalRestituicao` | Aditiva | Pode ser somado para obter o total restituído. |
+| Taxa de agenciamento | `valorTotalTaxaAgenciamento` | Aditiva | Pode ser somada; na exploração, apresentou valor zero em todos os registros de 2024. |
+| Multa | `valorMulta` | Aditiva | Pode ser somada; na exploração, apresentou valor zero em todos os registros de 2024. |
+
+Todas as medidas apresentadas são aditivas: seus valores podem ser somados entre os registros para produzir totais dos grupos analisados. A presença de valores iguais a zero em 2024 para taxa de agenciamento e multa não justifica a exclusão dessas medidas do desenho, pois o modelo contempla também 2025 e o período completo disponível na camada `trusted`.
+
+O valor total da viagem e seus componentes financeiros devem ser interpretados conforme a definição da origem. Não se deve somar o valor total com seus componentes como se fossem parcelas independentes, pois isso pode gerar dupla contagem.
+
+A média e a mediana do custo **não são medidas aditivas**. Elas devem ser calculadas a partir dos valores individuais das viagens que compõem cada grupo. Por exemplo, o custo médio de um instituto deve ser calculado como a soma dos custos dividida pela quantidade de viagens do instituto, e não pela soma ou pela média simples de médias previamente calculadas.
+
+A duração também pode ser analisada por média ou mediana. Essas estatísticas devem ser recalculadas a partir dos registros do grupo, e não somadas como se fossem medidas de custo. A medida `duracao_dias`, por sua vez, é aditiva quando o objetivo é obter o total de dias acumulados.
+
+# Informação de outra granularidade
+
+O atributo `viagem.numPcdp` identifica o Processo de Concessão de Diárias e Passagens (PCDP). Ele não deve ser tratado como identificador único da fato, pois a exploração da quarentena identificou PCDPs associados a mais de uma viagem.
+
+Assim, o PCDP representa uma unidade de análise potencialmente mais ampla que a viagem. O número pode permanecer na fato como **identificador degenerado**, permitindo rastrear a qual PCDP cada viagem está associada, mas não deve ser usado para definir a granularidade nem para somar valores como se cada PCDP correspondesse a uma única viagem.
+
+A identificação individual da fato continuará sendo realizada pelo atributo `id` da viagem. O `numPcdp` é mantido como informação de rastreabilidade, não como chave primária ou substituta da fato.
+
+# Fato agregada
+
+A fato agregada será construída para responder à pergunta P3 da exploração:
+
+> A duração das viagens está associada ao custo total?
+
+Sua granularidade será **uma linha por ano, instituto, tipo de viagem e faixa de duração**. As faixas consideradas são as utilizadas na exploração: `1`, `2–3`, `4–7` e `8+` dias.
+
+| Elemento | Definição |
+|---|---|
+| Pergunta atendida | Como o custo das viagens varia conforme a duração? |
+| Granularidade | Ano + instituto + tipo de viagem + faixa de duração. |
+| Medidas agregadas | Quantidade de viagens, soma dos dias, custo total, custo médio e custo mediano. |
+| Filtros mantidos | Ano, instituto, tipo de viagem e faixa de duração. |
+| Chave perdida | `id`, identificador individual da viagem na fato principal. |
+
+A agregação mantém o ano para permitir a análise separada de 2024 e 2025, inclusive a verificação das hipóteses na etapa seguinte. Também preserva instituto e tipo de viagem para que a relação entre duração e custo possa ser examinada nesses grupos.
+
+A dimensão de classificação completa não será utilizada como chave da agregação, pois ela reúne tipo, situação e urgência. A pergunta P3 considera apenas o tipo de viagem entre esses atributos. Utilizar `classificacao_sk` poderia produzir grupos diferentes para viagens do mesmo tipo, mas com situações ou níveis de urgência distintos, alterando a granularidade definida.
+
+Por isso, a agregação utilizará o próprio tipo de viagem como atributo de agrupamento, além do instituto, ano e faixa de duração. A chave lógica da fato agregada será composta por esses quatro atributos: `ano`, `instituto_sk`, `tipo_viagem` e `faixa_duracao`.
+
+Como os registros individuais são agrupados, deixa de ser possível identificar uma viagem específica apenas pela linha agregada. O atributo `id` da viagem é, portanto, a chave perdida nesse processo.
+
+O custo médio será calculado pela soma do custo total dividida pela quantidade de viagens de cada grupo. A mediana será calculada a partir dos custos individuais que compõem o grupo. Esses valores não devem ser somados entre grupos para produzir uma média geral.
+
+A soma dos dias será obtida pela agregação da medida `duracao_dias` dos registros individuais que pertencem a cada grupo. A quantidade de viagens será obtida pela contagem dos registros da fato principal em cada grupo.
+
+# Representação do modelo
+
+O esquema abaixo resume a proposta conceitual. A fato principal fica no centro do modelo e se relaciona às dimensões. A fato agregada é derivada da fato principal e conserva as categorias necessárias à pergunta P3.
+
+```{dot}
+//| label: fig-modelo-dimensional
+//| fig-cap: "Modelo dimensional das viagens (fato principal e fato agregada)."
+//| out-width: "85%"
+//| fig-width: 9.5
+//| fig-height: 6.2
+digraph MER {
+  graph [
+    rankdir=LR,
+    nodesep=0.65,
+    ranksep=1.25,
+    splines=ortho,
+    dpi=60,
+    pad=0.25,
+    fontname="Helvetica,Arial,sans-serif"
+  ];
+  node [
+    shape=none,
+    margin=0,
+    fontname="Helvetica,Arial,sans-serif",
+    fontsize=11.5
+  ];
+  edge [
+    fontname="Helvetica,Arial,sans-serif",
+    fontsize=10.5,
+    color="#374151",
+    penwidth=1.2
+  ];
+
+  DIM_DATA [label=<
+    <TABLE BORDER="1" CELLBORDER="0" CELLPADDING="5" CELLSPACING="0" COLOR="#94A3B8" STYLE="ROUNDED">
+      <TR><TD ALIGN="CENTER" BGCOLOR="#DBEAFE" COLSPAN="2"><FONT POINT-SIZE="12"><B>DIM_DATA</B></FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF"><U>data</U> <FONT COLOR="#64748B">(date)</FONT></TD><TD ALIGN="RIGHT" BGCOLOR="#FFFFFF"><FONT COLOR="#475569">(PK)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">ano <FONT COLOR="#64748B">(int)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF" COLSPAN="2">mes <FONT COLOR="#64748B">(int)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">dia <FONT COLOR="#64748B">(int)</FONT></TD></TR>
+    </TABLE>
+  >];
+
+  DIM_INSTITUTO [label=<
+    <TABLE BORDER="1" CELLBORDER="0" CELLPADDING="5" CELLSPACING="0" COLOR="#94A3B8" STYLE="ROUNDED">
+      <TR><TD ALIGN="CENTER" BGCOLOR="#DBEAFE" COLSPAN="2"><FONT POINT-SIZE="12"><B>DIM_INSTITUTO</B></FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF"><U>instituto_sk</U> <FONT COLOR="#64748B">(int)</FONT></TD><TD ALIGN="RIGHT" BGCOLOR="#FFFFFF"><FONT COLOR="#475569">(PK)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">sigla <FONT COLOR="#64748B">(string)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF" COLSPAN="2">nome <FONT COLOR="#64748B">(string)</FONT></TD></TR>
+    </TABLE>
+  >];
+
+  DIM_CLASS [label=<
+    <TABLE BORDER="1" CELLBORDER="0" CELLPADDING="5" CELLSPACING="0" COLOR="#94A3B8" STYLE="ROUNDED">
+      <TR><TD ALIGN="CENTER" BGCOLOR="#DBEAFE" COLSPAN="2"><FONT POINT-SIZE="12"><B>DIM_CLASSIFICACAO_VIAGEM</B></FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF"><U>classificacao_sk</U> <FONT COLOR="#64748B">(int)</FONT></TD><TD ALIGN="RIGHT" BGCOLOR="#FFFFFF"><FONT COLOR="#475569">(PK)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">tipo_viagem <FONT COLOR="#64748B">(string)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF" COLSPAN="2">situacao <FONT COLOR="#64748B">(string)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">urgencia_viagem <FONT COLOR="#64748B">(string)</FONT></TD></TR>
+    </TABLE>
+  >];
+
+  FATO_VIAGEM [label=<
+    <TABLE BORDER="1" CELLBORDER="0" CELLPADDING="5" CELLSPACING="0" COLOR="#64748B" STYLE="ROUNDED">
+      <TR><TD ALIGN="CENTER" BGCOLOR="#DCFCE7" COLSPAN="2"><FONT POINT-SIZE="12"><B>FATO_VIAGEM</B></FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF"><U>id</U> <FONT COLOR="#64748B">(string)</FONT></TD><TD ALIGN="RIGHT" BGCOLOR="#FFFFFF"><FONT COLOR="#475569">(PK)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">num_pcdp <FONT COLOR="#64748B">(string; degenerado)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF">data_inicio <FONT COLOR="#64748B">(date)</FONT></TD><TD ALIGN="RIGHT" BGCOLOR="#FFFFFF"><FONT COLOR="#475569">(FK)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC">data_fim <FONT COLOR="#64748B">(date)</FONT></TD><TD ALIGN="RIGHT" BGCOLOR="#F8FAFC"><FONT COLOR="#475569">(FK)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF">instituto_sk <FONT COLOR="#64748B">(int)</FONT></TD><TD ALIGN="RIGHT" BGCOLOR="#FFFFFF"><FONT COLOR="#475569">(FK)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC">classificacao_sk <FONT COLOR="#64748B">(int)</FONT></TD><TD ALIGN="RIGHT" BGCOLOR="#F8FAFC"><FONT COLOR="#475569">(FK)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF" COLSPAN="2">duracao_dias <FONT COLOR="#64748B">(int)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">valor_total_viagem <FONT COLOR="#64748B">(decimal)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF" COLSPAN="2">valor_total_diarias <FONT COLOR="#64748B">(decimal)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">valor_total_passagem <FONT COLOR="#64748B">(decimal)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF" COLSPAN="2">valor_total_devolucao <FONT COLOR="#64748B">(decimal)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">valor_total_restituicao <FONT COLOR="#64748B">(decimal)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF" COLSPAN="2">valor_total_taxa_agenciamento <FONT COLOR="#64748B">(decimal)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">valor_multa <FONT COLOR="#64748B">(decimal)</FONT></TD></TR>
+    </TABLE>
+  >];
+
+  FATO_AGREG [label=<
+    <TABLE BORDER="1" CELLBORDER="0" CELLPADDING="5" CELLSPACING="0" COLOR="#B45309" STYLE="ROUNDED">
+      <TR><TD ALIGN="CENTER" BGCOLOR="#FEF3C7" COLSPAN="2"><FONT POINT-SIZE="12"><B>FATO_VIAGEM_DURACAO</B></FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF"><U>ano, instituto_sk, tipo_viagem, faixa_duracao</U></TD><TD ALIGN="RIGHT" BGCOLOR="#FFFFFF"><FONT COLOR="#475569">(PK lógica)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">quantidade_viagens <FONT COLOR="#64748B">(int)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF" COLSPAN="2">total_dias <FONT COLOR="#64748B">(int)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">custo_total <FONT COLOR="#64748B">(decimal)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF" COLSPAN="2">custo_medio <FONT COLOR="#64748B">(decimal)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">custo_mediano <FONT COLOR="#64748B">(decimal)</FONT></TD></TR>
+    </TABLE>
+  >];
+
+  DIM_DATA -> FATO_VIAGEM [label=" início (1:N)"];
+  DIM_DATA -> FATO_VIAGEM [label=" fim (1:N)"];
+  DIM_INSTITUTO -> FATO_VIAGEM [label=" instituto (1:N)"];
+  DIM_CLASS -> FATO_VIAGEM [label=" classificação (1:N)"];
+  FATO_VIAGEM -> FATO_AGREG [label=" agregação", style=dashed, arrowhead=normal];
+}
+```
+
+A `DIM_DATA` participa da fato principal por dois relacionamentos: um para a data de início e outro para a data de fim. Esses relacionamentos representam dois papéis da mesma dimensão, e não duas dimensões independentes.
+
+A `FATO_VIAGEM_DURACAO` é derivada por agregação dos registros da `FATO_VIAGEM`. A seta tracejada representa essa derivação lógica; não indica uma chave estrangeira convencional entre duas tabelas fato.
+
+# Escopo do desenho e alinhamento com a implementação
+
+Este documento registra o **desenho conceitual do modelo dimensional**: processo de negócio, granularidade, dimensões, medidas, atributo de outra granularidade e fato agregada. A implementação física da camada Gold, incluindo o código de `model.py`, a geração dos arquivos e as saídas das execuções, é uma etapa distinta do trabalho.
+
+Após a implementação, o desenho deverá ser conferido com as tabelas efetivamente produzidas em `data/gold/`. Caso a implementação adote nomes físicos ou estruturas diferentes da proposta, este documento e o relatório final deverão ser ajustados para refletir o modelo realmente entregue. Essa conferência é necessária para garantir que o desenho conceitual e a camada Gold estejam consistentes.
+
+A execução normal e a execução de teste com uma linha de dimensão ausente devem ser documentadas com as saídas produzidas pela implementação. Essas evidências devem ser incorporadas ao relatório a partir das execuções realizadas na etapa de implementação, sem serem presumidas ou simuladas neste documento de desenho.
