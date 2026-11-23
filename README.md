@@ -178,3 +178,17 @@ Outras decisões do tratamento: a coluna `beneficiario.nis`, vazia em 100% dos r
 O `transform.py` grava `data/quarentena/rejeitados.parquet` com as viagens que violam alguma regra do contrato, junto com a coluna `motivo` e a data de detecção (`detectado_em`). As linhas não são descartadas e podem ser reprocessadas. Na coleta de 30/09/2026 foram 2 viagens, ambas pelo motivo `devolucao_maior_que_viagem`.
 
 Ao final da execução, o script imprime a quantidade de linhas em cada pasta e o resumo por motivo.
+
+### data/gold/
+
+O `model.py` grava um arquivo Parquet por tabela do modelo estrela:
+
+| Tabela | Linhas | Conteúdo |
+| ------ | ------ | -------- |
+| `dim_data` | 730 | um dia por linha, do primeiro ao último dia de viagem |
+| `dim_instituto` | 11 | sigla e nome de cada instituto |
+| `dim_classificacao_viagem` | 7 | tipo, situação e urgência |
+| `fato_viagem` | 47.357 | uma linha por viagem, com as medidas de valor |
+| `fato_viagem_duracao` | 121 | por ano, instituto, tipo e faixa de duração |
+
+O script confere o gold contra a trusted (contagem e soma de cada medida) e para sem gravar se algo não bater.
