@@ -131,8 +131,13 @@ uv run python src/transform.py
 ```bash
 uv run quarto render analises/exploracao.qmd
 ```
+### 7. Gerar a análise exploratória
 
-### 7. Executar a modelagem
+```bash
+uv run quarto render analises/estrela.qmd
+```
+
+### 8. Executar a modelagem
 
 ```bash
 uv run python src/model.py
