@@ -191,13 +191,13 @@ digraph MER {
       <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF">instituto_sk <FONT COLOR="#64748B">(int)</FONT></TD><TD ALIGN="RIGHT" BGCOLOR="#FFFFFF"><FONT COLOR="#475569">(FK)</FONT></TD></TR>
       <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC">classificacao_sk <FONT COLOR="#64748B">(int)</FONT></TD><TD ALIGN="RIGHT" BGCOLOR="#F8FAFC"><FONT COLOR="#475569">(FK)</FONT></TD></TR>
       <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF" COLSPAN="2">duracao_dias <FONT COLOR="#64748B">(int)</FONT></TD></TR>
-      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">valor_total_viagem <FONT COLOR="#64748B">(decimal)</FONT></TD></TR>
-      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF" COLSPAN="2">valor_total_diarias <FONT COLOR="#64748B">(decimal)</FONT></TD></TR>
-      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">valor_total_passagem <FONT COLOR="#64748B">(decimal)</FONT></TD></TR>
-      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF" COLSPAN="2">valor_total_devolucao <FONT COLOR="#64748B">(decimal)</FONT></TD></TR>
-      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">valor_total_restituicao <FONT COLOR="#64748B">(decimal)</FONT></TD></TR>
-      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF" COLSPAN="2">valor_total_taxa_agenciamento <FONT COLOR="#64748B">(decimal)</FONT></TD></TR>
-      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">valor_multa <FONT COLOR="#64748B">(decimal)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">valor_total_viagem <FONT COLOR="#64748B">(double)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF" COLSPAN="2">valor_total_diarias <FONT COLOR="#64748B">(double)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">valor_total_passagem <FONT COLOR="#64748B">(double)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF" COLSPAN="2">valor_total_devolucao <FONT COLOR="#64748B">(double)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">valor_total_restituicao <FONT COLOR="#64748B">(double)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF" COLSPAN="2">valor_total_taxa_agenciamento <FONT COLOR="#64748B">(double)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">valor_multa <FONT COLOR="#64748B">(double)</FONT></TD></TR>
     </TABLE>
   >];
 
@@ -207,9 +207,9 @@ digraph MER {
       <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF"><U>ano, instituto_sk, tipo_viagem, faixa_duracao</U></TD><TD ALIGN="RIGHT" BGCOLOR="#FFFFFF"><FONT COLOR="#475569">(PK lógica)</FONT></TD></TR>
       <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">quantidade_viagens <FONT COLOR="#64748B">(int)</FONT></TD></TR>
       <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF" COLSPAN="2">total_dias <FONT COLOR="#64748B">(int)</FONT></TD></TR>
-      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">custo_total <FONT COLOR="#64748B">(decimal)</FONT></TD></TR>
-      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF" COLSPAN="2">custo_medio <FONT COLOR="#64748B">(decimal)</FONT></TD></TR>
-      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">custo_mediano <FONT COLOR="#64748B">(decimal)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">custo_total <FONT COLOR="#64748B">(double)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#FFFFFF" COLSPAN="2">custo_medio <FONT COLOR="#64748B">(double)</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT" BGCOLOR="#F8FAFC" COLSPAN="2">custo_mediano <FONT COLOR="#64748B">(double)</FONT></TD></TR>
     </TABLE>
   >];
 
