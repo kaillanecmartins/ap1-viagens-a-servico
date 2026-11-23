@@ -126,6 +126,18 @@ uv run quarto render analises/diagnostico.qmd
 uv run python src/transform.py
 ```
 
+### 6. Gerar a análise exploratória
+
+```bash
+uv run quarto render analises/exploracao.qmd
+```
+
+### 7. Executar a modelagem
+
+```bash
+uv run python src/model.py
+```
+
 A coleta é idempotente: se um órgão e período já tiverem sido coletados, uma nova execução não realiza novamente aquela coleta.
 
 ## Resultados
