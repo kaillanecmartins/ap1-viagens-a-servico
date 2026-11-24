@@ -131,7 +131,8 @@ uv run python src/transform.py
 ```bash
 uv run quarto render analises/exploracao.qmd
 ```
-### 7. Gerar a análise exploratória
+
+### 7. Gerar a documentação do modelo estrela
 
 ```bash
 uv run quarto render analises/estrela.qmd
@@ -188,12 +189,12 @@ Ao final da execução, o script imprime a quantidade de linhas em cada pasta e 
 
 O `model.py` grava um arquivo Parquet por tabela do modelo estrela:
 
-| Tabela | Linhas | Conteúdo |
-| ------ | ------ | -------- |
-| `dim_data` | 730 | um dia por linha, do primeiro ao último dia de viagem |
-| `dim_instituto` | 11 | sigla e nome de cada instituto |
-| `dim_classificacao_viagem` | 7 | tipo, situação e urgência |
-| `fato_viagem` | 47.357 | uma linha por viagem, com as medidas de valor |
-| `fato_viagem_duracao` | 121 | por ano, instituto, tipo e faixa de duração |
+| Tabela                     | Linhas | Conteúdo                                              |
+| -------------------------- | ------ | ----------------------------------------------------- |
+| `dim_data`                 | 730    | um dia por linha, do primeiro ao último dia de viagem |
+| `dim_instituto`            | 11     | sigla e nome de cada instituto                        |
+| `dim_classificacao_viagem` | 7      | tipo, situação e urgência                             |
+| `fato_viagem`              | 47.357 | uma linha por viagem, com as medidas de valor         |
+| `fato_viagem_duracao`      | 121    | por ano, instituto, tipo e faixa de duração           |
 
 O script confere o gold contra a trusted (contagem e soma de cada medida) e para sem gravar se algo não bater.
